@@ -67,7 +67,13 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:none;bor
 @media(max-width:720px){.desktop-sidebar-toggle{display:none}}
 .titlebar{background:linear-gradient(135deg,var(--brand) 0%,var(--brand-darker) 100%);color:#fff;padding:7px 16px;font-size:11.5px;display:flex;gap:8px;align-items:center;letter-spacing:0.01em;font-weight:500;box-shadow:inset 0 -1px 0 rgba(255,255,255,.10)}
 .titlebar .dot{width:16px;height:16px;background:#fff;border-radius:5px;display:inline-grid;place-items:center;color:var(--brand);font-weight:800;font-size:10px;line-height:1}
-.app{display:grid;grid-template-columns:248px 1fr;min-height:calc(100vh - 30px)}
+.app{display:grid;grid-template-columns:var(--sidebar-w,248px) 1fr;min-height:calc(100vh - 30px)}
+/* The sidebar's right edge can be dragged to resize it (DeskLayout: --sidebar-w, 200-420px, kept per
+   browser). Not on the 64px icon rail below 1100px, the mobile drawer, or while the sidebar is closed. */
+.sidebar-resizer{position:fixed;top:0;bottom:0;left:calc(var(--sidebar-w,248px) - 3px);width:6px;cursor:col-resize;z-index:45;touch-action:none;transition:background .15s}
+.sidebar-resizer:hover,.sidebar-resizer:focus-visible,body.resizing-sidebar .sidebar-resizer{background:var(--brand-light);outline:none}
+body.resizing-sidebar{cursor:col-resize;user-select:none}
+@media(max-width:1100px){.sidebar-resizer{display:none}}
 .sidebar{background:var(--surface);border-right:1px solid var(--line);padding:16px 14px;display:flex;flex-direction:column;gap:6px;position:sticky;top:0;align-self:start;height:calc(100vh - 30px);overflow-y:auto}
 .mobile-nav-toggle,.mobile-nav-backdrop,.mobile-nav-drawer{display:none}
 .logo{display:flex;align-items:center;gap:11px;padding:6px 8px 16px;border-bottom:1px solid var(--line-2);margin-bottom:10px}
@@ -1491,9 +1497,11 @@ input[type="number"],.numeric,.stat-card .val{font-variant-numeric:tabular-nums;
 .area-option:hover:not(.active){background:var(--surface);color:var(--text)}
 .area-option.active{background:var(--brand);color:#fff;box-shadow:0 3px 9px color-mix(in srgb,var(--brand) 25%,transparent)}
 .area-option:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
-.area-option.precon{grid-column:1/-1;display:flex;align-items:center;justify-content:center;gap:5px;color:var(--text)}
-.area-option.precon:hover{color:var(--brand)}
-.area-external{color:var(--muted);font-size:10px;font-weight:800}
+/* The external links share the row under the switch, wrapping to two lines; one alone takes the whole row. */
+.area-links{grid-column:1/-1;display:flex;gap:5px;min-width:0}
+.area-option.area-link{flex:1 1 0;color:var(--text);white-space:normal;line-height:1.25}
+.area-option.area-link:hover{color:var(--brand)}
+.area-external{margin-left:4px;color:var(--muted);font-size:10px;font-weight:800;white-space:nowrap}
 .area-switch.in-sidebar{margin:0 10px 10px}
 /* Wide screens: the sidebar copy is the live one. */
 .area-switch.in-topbar{display:none}
@@ -1730,7 +1738,7 @@ td.num{font-variant-numeric:tabular-nums;text-align:right}
    at 1100px), rather than the modal being given a margin. Insetting the overlay means the dimmed
    backdrop stops at the rail too, so the sidebar reads as available rather than as greyed out
    behind glass. */
-.overlay.beside-nav{left:248px;padding:0;align-items:stretch;justify-content:stretch}
+.overlay.beside-nav{left:var(--sidebar-w,248px);padding:0;align-items:stretch;justify-content:stretch}
 .modal.full{width:100%;max-width:100%;height:100vh;border-radius:0;border-left:none;
   display:flex;flex-direction:column;padding:20px 24px;overflow-y:auto}
 /* The form fills the remaining height so the body editor grows with the window instead of leaving
