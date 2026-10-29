@@ -28,8 +28,11 @@ export const LEAD_RESPONSE = [
  *
  * 'website' was added when the Dashboard started reporting leads by source — there was no way to
  * record a website enquiry before.
+ *
+ * 'whatsapp' was added with the WhatsApp agent intake (src/whatsapp), which writes it on every lead
+ * a WhatsApp message creates — without it here the Leads editor would refuse to save such a lead.
  */
-export const LEAD_SOURCE = ['google ads', 'meta', 'website', 'referral', 'linkedin', 'youtube'] as const;
+export const LEAD_SOURCE = ['google ads', 'meta', 'website', 'referral', 'linkedin', 'youtube', 'whatsapp'] as const;
 
 /** The misspelling as it exists in stored rows. Accepted on input, matched on filter, never offered. */
 export const LEGACY_REFERRAL = 'refferal';

@@ -31,6 +31,9 @@ const CSRF_EXEMPT_PATHS = new Set([
   '/api/sms/twilio/inbound',
   '/api/sms/twilio/call-status',
   '/api/sms/twilio/recording-status',
+  // WhatsApp Cloud API messages (Meta). Verified by the same `x-hub-signature-256` HMAC as the
+  // lead-ads webhook, over the raw body, before anything is read.
+  '/api/whatsapp/webhook',
   // TwiML Twilio fetches when a browser Voice-SDK call connects; X-Twilio-Signature verified.
   '/api/twilio/voice',
   // Google redirects the browser here after consent; trusted via the signed OAuth `state`.

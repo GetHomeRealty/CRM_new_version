@@ -436,6 +436,7 @@ model leads {
   crm_teams            crm_teams?            @relation(fields: [team_id], references: [id], onDelete: Restrict, onUpdate: Restrict)
   crm_lead_assignment_events crm_lead_assignment_events[]
   meta_lead_inquiries  meta_lead_inquiries[]
+  whatsapp_intake      whatsapp_intake[]
 
   /// The brokerage this row belongs to. See src/core/tenancy.spec.ts for why this table carries one.
 
@@ -4293,4 +4294,56 @@ model payment_sheet_rows {
   uploaded_at         DateTime  @db.Timestamp(0)
 
   @@index([position])
+}
+
+/// WhatsApp support rotation — CRM → Settings → WhatsApp Rotation (migration 20261029120000).
+/// One row. Whether incoming WhatsApp enquiries are handed out automatically, and the moment the
+/// first member's first turn began; every later turn is counted forward from it.
+model whatsapp_rotation_settings {
+  id              Int      @id @default(autoincrement())
+  is_enabled      Boolean  @default(true)
+  cycle_starts_at DateTime @db.Timestamp(0)
+  updated_by      String?  @db.VarChar(255)
+  updated_at      DateTime @db.Timestamp(0)
+}
+
+/// The people on the WhatsApp rota, in turn order. `user_id` is who takes the turn, not an owner;
+/// it is a bare integer, and a person whose account is Inactive is skipped when turns are counted.
+model whatsapp_rotation_members {
+  id               Int      @id @default(autoincrement())
+  user_id          Int      @unique
+  position         Int
+  /// How long this person's turn lasts, in minutes.
+  duration_minutes Int
+  /// Paused members (leave, holiday) keep their place in the list but take no turns.
+  is_active        Boolean  @default(true)
+  created_at       DateTime @db.Timestamp(0)
+  updated_at       DateTime @db.Timestamp(0)
+
+  @@index([position])
+}
+
+/// One incoming WhatsApp message and who it went to. Keyed by WhatsApp's own message id, so a
+/// webhook Meta delivers twice is recorded once. The assignee's name and turn are snapshotted.
+model whatsapp_intake {
+  id                 Int       @id @default(autoincrement())
+  wa_message_id      String    @unique @db.VarChar(128)
+  lead_id            Int
+  from_phone         String    @db.VarChar(32)
+  profile_name       String?   @db.VarChar(255)
+  message_type       String    @db.VarChar(24)
+  body               String    @db.Text
+  /// true when this message created the lead; false when it was added to an existing one.
+  is_new_lead        Boolean
+  assigned_user_id   Int?
+  assigned_user_name String?   @db.VarChar(255)
+  /// The on-duty turn the message arrived in. Null when it went to the lead's existing handler.
+  slot_starts_at     DateTime? @db.Timestamp(0)
+  slot_ends_at       DateTime? @db.Timestamp(0)
+  received_at        DateTime  @db.Timestamp(0)
+  created_at         DateTime  @db.Timestamp(0)
+  leads              leads     @relation(fields: [lead_id], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([lead_id])
+  @@index([received_at])
 }

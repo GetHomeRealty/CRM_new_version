@@ -94,6 +94,10 @@ const ROOT = [
   // A CRM team is the brokerage's own structure: its lead is a pointer that may be cleared, not
   // an owner the team hangs off.
   'crm_teams',
+  // The WhatsApp support rotation (Settings → WhatsApp Rotation): the brokerage's own rota. A
+  // member's `user_id` is who takes the turn, a bare integer with no foreign key, not an owner.
+  'whatsapp_rotation_settings',
+  'whatsapp_rotation_members',
 ] as const;
 
 /**
@@ -163,6 +167,8 @@ const DERIVED: Record<string, string> = {
   lead_emails: 'leads', lead_messages: 'leads',
   // One row per Meta form submission; read only through its lead, and cascades with it.
   meta_lead_inquiries: 'leads',
+  // One incoming WhatsApp message and who it went to; read through its lead, and cascades with it.
+  whatsapp_intake: 'leads',
   lead_call_recordings: 'lead_calls',
   // via transactions
   clients: 'transactions', documents: 'transactions', conditions: 'transactions',

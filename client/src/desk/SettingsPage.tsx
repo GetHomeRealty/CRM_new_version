@@ -15,6 +15,7 @@ import RolesPanel from './RolesPanel';
 import LicencePanel from './LicencePanel';
 import LeadBooksPanel from './LeadBooksPanel';
 import CrmTeamsPanel from './CrmTeamsPanel';
+import WhatsAppRotationPanel from './WhatsAppRotationPanel';
 import Icon from '../ui/Icon';
 
 /**
@@ -80,6 +81,9 @@ const TABS: TabDef[] = [
    * server (`CrmTeamsService.mayManage`): choosing who is in a team decides whose leads they read.
    */
   { key: 'teams', label: 'Teams', ico: 'users', area: 'crm', adminOrAbove: true },
+  // Who incoming WhatsApp enquiries go to, in timed turns. Admin / Super Admin only, matching the
+  // server (`WhatsAppRotationService`): the rota decides whose book those leads land in.
+  { key: 'whatsapp', label: 'WhatsApp Rotation', ico: 'message', area: 'crm', adminOrAbove: true },
   { key: 'company', label: 'Company Settings', ico: 'building', screen: 'settings' },
   // The company's certificates and stakeholders, per country (19 Oct 2026). Super Admin only (Sai) -
   // apart from Company Settings, so who can open that tab is unchanged.
@@ -323,6 +327,7 @@ export default function SettingsPage() {
         </>
       )}
       {tab === 'teams' && isAdminOrAbove && <CrmTeamsPanel />}
+      {tab === 'whatsapp' && isAdminOrAbove && <WhatsAppRotationPanel />}
       {tab === 'company' && <CompanySettingsPage />}
       {tab === 'documents' && isSuperAdmin && <CompanyDocumentsTab />}
       {tab === 'roles' && <><LicencePanel /><RolesPanel /><LeadBooksPanel /></>}
