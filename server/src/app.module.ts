@@ -55,7 +55,6 @@ import { MarketingInventoryModule } from './marketing-inventory/marketing-invent
 import { MlsModule } from './mls/mls.module';
 import { FavoritesModule } from './favorites/favorites.module';
 import { TwilioVoiceModule } from './twilio-voice/twilio-voice.module';
-import { WhatsAppModule } from './whatsapp/whatsapp.module';
 
 @Module({
   imports: [
@@ -116,7 +115,6 @@ import { WhatsAppModule } from './whatsapp/whatsapp.module';
     BuildersModule,
     IndiaModule,
     CompanyDocumentsModule,
-    WhatsAppModule,
   ],
   controllers: [AppController, HealthController],
   providers: [
