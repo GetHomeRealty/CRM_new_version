@@ -231,9 +231,10 @@ const SIDEBAR_MAX = 420;
 
 /*
  * Support Services sits beside Precon/Canada for everyone, Accounting included (brokerage request,
- * 2026-10-29). The link stays hidden while this is empty.
+ * 2026-10-29). The link stays hidden while this is empty: hidden again the same day at Madhu's
+ * request; put 'https://gethomehub.ca/' back to show it.
  */
-const SUPPORT_SERVICES_URL: string = 'https://gethomehub.ca/';
+const SUPPORT_SERVICES_URL: string = '';
 
 export default function DeskLayout({ area = DEFAULT_AREA }: { area?: Area }) {
   const { logout, user, can, isAdminOrAbove, isSuperAdmin, modules } = useAuth();
