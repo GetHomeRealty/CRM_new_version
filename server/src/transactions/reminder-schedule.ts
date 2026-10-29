@@ -157,27 +157,24 @@ export function deadlinePhrase(daysRemaining: number): string {
 // ---------------------------------------------------------------- lawyer details
 
 /**
- * The three phases of the run-up to closing, and how often each chases.
+ * THE DAYS A CLOSING DEAL IS CHASED FOR LAWYER DETAILS (Sai, 29 Oct 2026), counted back from the
+ * closing date, whatever day of the week they fall on - the same way as the closing-date reminder:
  *
- * Frequency is expressed as the weekdays it falls on rather than as "every N days", because a
- * cadence counted in days drifts across the week and lands on a Sunday sooner or later. Anchoring to
- * weekdays keeps the reminders evenly spaced AND on working days, which is what makes them useful.
+ *   30, 23     the first fortnight, once a week
+ *   15, 11     the third week, twice
+ *   7, 5, 3, 1 the last week, every other day
+ *   0          and the closing day itself
  *
- * 0 is Sunday in JavaScript's own numbering: 1 Mon, 3 Wed, 4 Thu, 5 Fri.
+ * It replaced weekday phases (Mondays; Monday + Thursday; Monday, Wednesday, Friday), which the
+ * brokerage asked to be counted from the closing date instead.
  */
-export const LAWYER_PHASES = [
-  { from: 30, to: 16, perWeek: 1, weekdays: [1] },          // Monday
-  { from: 15, to: 8, perWeek: 2, weekdays: [1, 4] },        // Monday, Thursday
-  { from: 7, to: 0, perWeek: 3, weekdays: [1, 3, 5] },      // Monday, Wednesday, Friday
-] as const;
+export const LAWYER_REMINDER_DAYS: readonly number[] = [30, 23, 15, 11, 7, 5, 3, 1, 0];
 
 export const LAWYER_WINDOW_DAYS = 30;
 
 export interface LawyerDue {
   due: boolean;
   daysRemaining: number;
-  /** 1, 2 or 3 — what the phase promises, for the audit line and the history. */
-  perWeek: number | null;
 }
 
 /**
@@ -188,16 +185,7 @@ export interface LawyerDue {
  */
 export function lawyerReminderFor(today: Date, closing: Date): LawyerDue {
   const daysRemaining = daysBetween(today, closing);
-  if (daysRemaining < 0 || daysRemaining > LAWYER_WINDOW_DAYS) {
-    return { due: false, daysRemaining, perWeek: null };
-  }
-  const phase = LAWYER_PHASES.find((p) => daysRemaining <= p.from && daysRemaining >= p.to);
-  if (!phase) return { due: false, daysRemaining, perWeek: null };
-  return {
-    due: (phase.weekdays as readonly number[]).includes(startOfDay(today).getDay()),
-    daysRemaining,
-    perWeek: phase.perWeek,
-  };
+  return { due: LAWYER_REMINDER_DAYS.includes(daysRemaining), daysRemaining };
 }
 
 /** "closing tomorrow" / "closing today" read better than a bare number at the sharp end. */

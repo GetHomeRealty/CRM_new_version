@@ -138,11 +138,11 @@ export default function DeskTriggersPanel() {
         <div className="field" style={{ maxWidth: 520 }}>
           <label>Lawyer-detail reminders</label>
           <p className="help" style={{ margin: '0 0 8px' }}>
-            Every hour, each Buying deal that still has a lawyer name, email, phone or
-            address missing is re-checked. The agent on the deal is emailed again once this many days
-            have passed since their last reminder, and keeps being reminded until the details are
-            entered. <strong>Zero switches the recurring reminder off</strong> — the one-off nudge
-            when a deal is saved with details missing still goes out.
+            Each Buying deal still missing its buyer's or seller's lawyer name, email or phone is
+            chased 30 and 23 days before closing, then 15 and 11 days before, then 7, 5, 3 and 1 day
+            before, and on the closing day itself. The reminder asks only for the side that is missing,
+            and stops once both are entered. <strong>Zero switches the recurring reminder off</strong> — the
+            one-off nudge when a deal is saved with details missing still goes out.
           </p>
           <div className="toolbar-row" style={{ gap: 8, alignItems: 'center' }}>
             <input type="number" min={0} max={365} value={days} disabled={!canEdit || saving === 'cadence'}

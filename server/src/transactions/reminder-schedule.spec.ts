@@ -76,11 +76,8 @@ describe('listing expiry countdown', () => {
   });
 });
 
-describe('lawyer-detail phases', () => {
-  // A Friday close, so the run-up covers every weekday in each phase.
+describe('lawyer-detail reminder days (Sai, 29 Oct 2026)', () => {
   const closing = day(2026, 9, 25);
-
-  /** Which days inside a span are due, as day-counts remaining. */
   const dueDays = (fromDaysOut: number, toDaysOut: number): number[] => {
     const out: number[] = [];
     for (let d = fromDaysOut; d >= toDaysOut; d--) {
@@ -95,49 +92,26 @@ describe('lawyer-detail phases', () => {
     }
   });
 
-  it('chases once a week between 30 and 16 days out', () => {
-    const due = dueDays(LAWYER_WINDOW_DAYS, 16);
-    // Fifteen days is a fortnight and a day: two Mondays.
-    expect(due).toHaveLength(2);
-    for (const d of due) expect(plusDays(closing, -d).getDay()).toBe(1);
-    for (const d of due) expect(lawyerReminderFor(plusDays(closing, -d), closing).perWeek).toBe(1);
+  it('chases on 30, 23, 15, 11, 7, 5, 3, 1 days out and on the closing day - and only then', () => {
+    expect(dueDays(LAWYER_WINDOW_DAYS, 0)).toEqual([30, 23, 15, 11, 7, 5, 3, 1, 0]);
   });
 
-  it('chases twice a week between 15 and 8 days out, on a Monday and a Thursday', () => {
-    const due = dueDays(15, 8);
-    expect(due.length).toBeGreaterThanOrEqual(2);
-    for (const d of due) expect([1, 4]).toContain(plusDays(closing, -d).getDay());
-    for (const d of due) expect(lawyerReminderFor(plusDays(closing, -d), closing).perWeek).toBe(2);
+  it('is twice in the first fortnight, twice in the third week, every other day in the last week', () => {
+    expect(dueDays(30, 16)).toEqual([30, 23]);
+    expect(dueDays(15, 8)).toEqual([15, 11]);
+    expect(dueDays(7, 1)).toEqual([7, 5, 3, 1]);
   });
 
-  it('chases three times a week in the last seven days', () => {
-    const due = dueDays(7, 0);
-    expect(due.length).toBeGreaterThanOrEqual(3);
-    for (const d of due) expect([1, 3, 5]).toContain(plusDays(closing, -d).getDay());
-    for (const d of due) expect(lawyerReminderFor(plusDays(closing, -d), closing).perWeek).toBe(3);
-  });
-
-  it('never chases on a weekend, in any phase', () => {
-    for (let d = LAWYER_WINDOW_DAYS; d >= 0; d--) {
-      const date = plusDays(closing, -d);
-      const weekend = date.getDay() === 0 || date.getDay() === 6;
-      if (weekend) expect(lawyerReminderFor(date, closing).due).toBe(false);
-    }
+  it('counts from the closing date, weekends included', () => {
+    const sat = day(2026, 10, 31); // a Saturday closing - its 7-days-out reminder falls on a Saturday
+    expect(plusDays(sat, -7).getDay()).toBe(6);
+    expect(lawyerReminderFor(plusDays(sat, -7), sat).due).toBe(true);
   });
 
   it('stops once the closing date has passed', () => {
     for (let d = 1; d <= 10; d++) {
       expect(lawyerReminderFor(plusDays(closing, d), closing).due).toBe(false);
     }
-  });
-
-  it('gets busier as the date approaches — the whole point of the phases', () => {
-    const early = dueDays(30, 16).length;
-    const middle = dueDays(15, 8).length;
-    const late = dueDays(7, 0).length;
-    // Per week: 1, then 2, then 3, over spans of 15, 8 and 8 days.
-    expect(early / 15).toBeLessThan(middle / 8);
-    expect(middle / 8).toBeLessThan(late / 8);
   });
 
   it('words the last two days the way a person would', () => {
