@@ -1497,6 +1497,9 @@ const HTML_VARIABLES = new Set([
   'logo_img', 'training_banner',
   'commission_terms', 'agent_address', 'company_address', 'agent_type',
   'documents_table', 'pending_docs', 'transaction_button',
+  // 29 Oct 2026 - the Documentation morning summary's table (DocumentDigestService.table escapes
+  // every value it puts in). Left off at first, so Jyothi's first email showed the table as code.
+  'deals_table',
 ]);
 
 /** The five characters that change the meaning of HTML. */

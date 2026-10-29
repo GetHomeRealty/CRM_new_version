@@ -93,7 +93,7 @@ describe('the markup variables are NOT escaped, and each one has earned it', () 
     expect(renderTemplate(`{{ ${key} }}`, { [key]: html })).toBe(html);
   });
 
-  it('the allow-list is exactly these nine and no more', () => {
+  it('the allow-list is exactly these ten and no more', () => {
     /*
      * A guard on the list itself. Adding a variable here is a security decision — whatever builds it
      * becomes responsible for producing safe HTML — so growing the list should require changing this
@@ -109,6 +109,8 @@ describe('the markup variables are NOT escaped, and each one has earned it', () 
     );
     expect(passthrough.sort()).toEqual([
       'agent_address', 'agent_type', 'commission_terms', 'company_address',
+      // 29 Oct 2026 - the Documentation morning summary; DocumentDigestService.table escapes every value.
+      'deals_table',
       'documents_table', 'logo_img', 'pending_docs', 'training_banner', 'transaction_button',
     ]);
   });

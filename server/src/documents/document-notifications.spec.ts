@@ -3,6 +3,7 @@ import type { PrismaService } from '../prisma/prisma.service';
 import { DocumentsService } from './documents.service';
 import { DocumentMailService } from './document-mail.service';
 import { DocumentDigestService } from './document-digest.service';
+import { MAIL_EVENTS, renderTemplate } from '../email/mail-event-registry';
 
 /**
  * DOCUMENT NOTIFICATIONS BETWEEN AGENTS AND DOCUMENTATION (Sai, 29 Oct 2026).
@@ -227,6 +228,22 @@ describe('the morning summary to Documentation', () => {
 
       expect(await h.digest.send(new Date(2026, 9, 30, 10, 0))).toEqual([]); // same day again: nothing
       expect(h.sent.filter((m) => m.event === 'document.waiting_summary')).toHaveLength(2);
+    });
+  });
+});
+
+describe('the morning summary email renders as a table, not as code (the first email Jyothi got, 29 Oct)', () => {
+  it('keeps the deals table as HTML but still escapes what is inside it', async () => {
+    await inRollback(async (tx) => {
+      const h = harness(tx);
+      const table = (h.digest as unknown as { table: (d: unknown[]) => string }).table([
+        { id: 1, trade_no: '002384', property: '48 <b>Goldenwood</b>', agent: 'A & B', waiting: 1, oldest: null },
+      ]);
+      const html = renderTemplate(MAIL_EVENTS['document.waiting_summary'].default_body_html, { recipient_name: 'Jyothi', document_count: '1', deal_count: '1', deals_table: table, company_name: 'X' });
+      expect(html).toContain('<table style=');
+      expect(html).not.toContain('&lt;table');
+      expect(html).toContain('48 &lt;b&gt;Goldenwood&lt;/b&gt;');
+      expect(html).toContain('A &amp; B');
     });
   });
 });
