@@ -13,7 +13,12 @@ const DATE_FIELDS = {
   closing_date: { label: 'Closing Date', lower: 'closing date', testid: 'closing-date', input: 'date', toast: 'Closing date', example: 'e.g. Builder extended the closing per the amendment' },
   offer_date: { label: 'Offer Date', lower: 'offer date', testid: 'offer-date', input: 'date', toast: 'Offer date', example: 'e.g. Offer date entered wrong; the signed APS is dated 28 Aug' },
   mls_num: { label: 'MLS #', lower: 'MLS number', testid: 'mls-num', input: 'text', toast: 'MLS number', example: 'e.g. MLS number corrected to match the listing' },
+  // 30 Oct 2026 (Sai): an agent asks; Documentation or a Super Admin approves. No reason needed.
+  listing_expiry_date: { label: 'Listing Expiry Date', lower: 'listing expiry date', testid: 'listing-expiry', input: 'date', toast: 'Listing expiry date', example: 'Optional, e.g. extension signed by the seller' },
 } as const;
+/** Fields whose request needs no reason, and who reviews each. */
+const REASON_OPTIONAL = new Set<string>(['listing_expiry_date']);
+const REVIEWER: Record<string, string> = { listing_expiry_date: 'Documentation or a Super Admin' };
 
 /**
  * DOCUMENTATION ASKS FOR A NEW CLOSING DATE; A SUPER ADMIN APPROVES IT.
@@ -42,6 +47,8 @@ export default function ClosingDateRequestDialog({ open, onClose, transactionId,
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const f = DATE_FIELDS[field];
+  const reasonNeeded = !REASON_OPTIONAL.has(field);
+  const reviewer = REVIEWER[field] ?? 'a Super Admin';
 
   useEffect(() => { if (open) { setDate(current); setReason(''); setError(''); } }, [open, current]);
 
@@ -50,12 +57,12 @@ export default function ClosingDateRequestDialog({ open, onClose, transactionId,
   const unchanged = !date.trim() || date.trim() === current;
   const send = async () => {
     if (unchanged) { setError(`${f.input === 'date' ? 'Pick' : 'Enter'} a new ${f.lower} first.`); return; }
-    if (!reason.trim()) { setError('Give a reason for the change.'); return; }
+    if (reasonNeeded && !reason.trim()) { setError('Give a reason for the change.'); return; }
     setBusy(true);
     setError('');
     try {
       await requestTransactionEdit(transactionId, reason.trim(), field, { [field]: date.trim() });
-      toast(`${f.toast} change sent to a Super Admin for approval`, 'ok');
+      toast(`${f.toast} change sent to ${reviewer} for approval`, 'ok');
       onClose();
       onSent();
     } catch (e) {
@@ -72,7 +79,7 @@ export default function ClosingDateRequestDialog({ open, onClose, transactionId,
       <div className="modal" style={{ maxWidth: 460, margin: 0 }} data-testid={`${f.testid}-request-dialog`}>
         <div className="modal-h">Request {f.lower} change</div>
         <p style={{ fontSize: 13, marginTop: 4 }}>
-          A Super Admin reviews this. The {f.lower} stays as it is until they approve it.
+          {reviewer.charAt(0).toUpperCase() + reviewer.slice(1)} reviews this. The {f.lower} stays as it is until they approve it.
         </p>
         <div className="g2" style={{ marginTop: 10 }}>
           <div className="field" style={{ marginBottom: 0 }}>
@@ -86,7 +93,7 @@ export default function ClosingDateRequestDialog({ open, onClose, transactionId,
           </div>
         </div>
         <div className="field" style={{ marginTop: 10 }}>
-          <label>Reason <span className="req">*</span></label>
+          <label>Reason {reasonNeeded ? <span className="req">*</span> : <span className="muted" style={{ fontWeight: 400 }}>(optional)</span>}</label>
           <textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} data-testid={`${f.testid}-reason`}
             placeholder={f.example} />
         </div>
@@ -94,7 +101,7 @@ export default function ClosingDateRequestDialog({ open, onClose, transactionId,
         <div className="actions">
           <button className="btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
           <button className="btn primary" data-testid={`${f.testid}-submit`}
-            onClick={() => void send()} disabled={busy || unchanged || !reason.trim()}>
+            onClick={() => void send()} disabled={busy || unchanged || (reasonNeeded && !reason.trim())}>
             {busy ? 'Sending…' : 'Send for approval'}
           </button>
         </div>

@@ -14,7 +14,9 @@ export class DeskReviewerGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const req = context.switchToHttp().getRequest<Request>();
     const u = req.authUser;
-    if (!isSuperAdmin(u) && deskTeamLeadIdOf(u) === null) {
+    // 30 Oct 2026 - Documentation members too: they approve an agent's new listing expiry date. The
+    // service's `mayDecide` still limits them to that one kind of request.
+    if (!isSuperAdmin(u) && deskTeamLeadIdOf(u) === null && u?.role !== 'documentation') {
       throw new ForbiddenException({ message: 'Administrator access required.' });
     }
     return true;

@@ -2,7 +2,7 @@ import { IsIn, IsNotEmpty, IsOptional, IsString, MaxLength, IsObject } from 'cla
 
 export class EditRequestDto {
   @IsOptional() @IsString() @MaxLength(2000) reason?: string | null;
-  @IsOptional() @IsIn(['financial', 'commission', 'closing_date', 'offer_date', 'mls_num', 'brokerage', 'clients']) scope?: string | null;
+  @IsOptional() @IsIn(['financial', 'commission', 'closing_date', 'offer_date', 'mls_num', 'brokerage', 'clients', 'listing_expiry_date']) scope?: string | null;
 
   /**
    * The commission values being proposed, for `scope: 'commission'`.

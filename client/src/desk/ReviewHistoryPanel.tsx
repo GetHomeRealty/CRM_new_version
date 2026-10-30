@@ -346,6 +346,7 @@ const SCOPE_WORDS: Record<string, string> = {
   closing_date: 'Closing date change',
   offer_date: 'Offer date change',
   mls_num: 'MLS number change',
+  listing_expiry_date: 'Listing expiry date change',
   brokerage: 'Brokerage change',
   clients: 'Client change',
 };
@@ -360,7 +361,7 @@ const BROKERAGE_LABELS: [string, string][] = [
 const REQ_CELL: CSSProperties = { padding: '6px 28px 6px 0', whiteSpace: 'nowrap', textAlign: 'left' };
 
 /** Date keys a request can carry; shown as "21-October-2026" (as Basic Info shows them) rather than 2026-10-21. */
-const DATE_KEYS = new Set(['closing_date', 'offer_date']);
+const DATE_KEYS = new Set(['closing_date', 'offer_date', 'listing_expiry_date']);
 const longDate = (v: unknown): string => (v === null || v === undefined || v === '' ? '—' : dayMonthYear(String(v)));
 
 /** Human labels for the keys a commission proposal can carry. */
@@ -369,6 +370,7 @@ const COMMISSION_LABELS: Record<string, string> = {
   deposit: 'Deposit',
   closing_date: 'Closing Date',
   offer_date: 'Offer Date',
+  listing_expiry_date: 'Listing Expiry Date',
   comm_pct: 'Commission %',
   comm_amt: 'Commission Amount',
   precon_comm_pct: 'Commission %',

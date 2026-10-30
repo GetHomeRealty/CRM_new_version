@@ -291,6 +291,8 @@ const AGENT_LOCKED = [
   'payment_type',
   'precon_net_of_hst', 'precon_comm_pct', 'precon_comm_amt_manual', 'precon_comm_bonus', 'precon_listing_type',
   'adjustments', 'admin_activities',
+  // 30 Oct 2026 (Sai): an agent asks for a new Listing Expiry Date; Documentation or a Super Admin approves.
+  'listing_expiry_date',
 ];
 
 /**

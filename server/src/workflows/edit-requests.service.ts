@@ -6,9 +6,12 @@ import { toDateString, toDateTimeString } from '../common/serialize';
 import type { AuthUserRecord } from '../auth/auth.types';
 
 
-import { isAdminOrAbove, isSuperAdmin, superAdminRoles } from '../core/authz';
+import { isAdminOrAbove, isAgent, isSuperAdmin, superAdminRoles } from '../core/authz';
+import { ownsTransaction, teamMemberIdentity } from '../common/transaction-scope';
+import { ReminderSweepService } from '../transactions/reminder-sweep.service';
 import { NotificationDispatcher } from '../notifications/notification-dispatcher.service';
 import { leadTitle, mayDecide, teamLeadOfRequester } from './team-review';
+import { deskTeamLeadIdOf } from '../users/team-lead';
 import { TransactionsWriteService } from '../transactions/transactions-write.service';
 /**
  * The scope that means "I am proposing these commission numbers", as opposed to "let me edit".
@@ -129,8 +132,16 @@ export const OFFER_DATE_PROPOSABLE: ReadonlySet<string> = new Set(['offer_date']
  */
 export const MLS_SCOPE = 'mls_num';
 
+/**
+ * THE LISTING EXPIRY DATE (Sai, 30 Oct 2026): an agent no longer changes it directly - they type the
+ * new date and it waits for Documentation or a Super Admin to approve (see `mayDecide`). Approving
+ * applies it through the ordinary save, so an Expired listing returns to Active by itself.
+ */
+export const LISTING_EXPIRY_SCOPE = 'listing_expiry_date';
+
 /** The single-field scopes, each proposing exactly its own one field. */
 const DATE_SCOPES: Readonly<Record<string, { key: string; label: string; kind: 'date' | 'text' }>> = {
+  [LISTING_EXPIRY_SCOPE]: { key: 'listing_expiry_date', label: 'listing expiry date', kind: 'date' },
   [CLOSING_DATE_SCOPE]: { key: 'closing_date', label: 'closing date', kind: 'date' },
   [OFFER_DATE_SCOPE]: { key: 'offer_date', label: 'offer date', kind: 'date' },
   [MLS_SCOPE]: { key: 'mls_num', label: 'MLS number', kind: 'text' },
@@ -253,7 +264,33 @@ export class EditRequestsService {
      * applying it needs this.
      */
     private readonly writes?: TransactionsWriteService,
+    /* 30 Oct 2026 - recalculates the listing expiry reminders after an approved new date. Optional likewise. */
+    private readonly reminders?: ReminderSweepService,
   ) {}
+
+  /** Only a listing's own agent (or a full team member), or the office, may ask for a new expiry date. */
+  private async mayAskExpiry(user: AuthUserRecord, t: { id: number; type: string; agent: string | null; agent_user_id: number | null }): Promise<void> {
+    if (!/listing/i.test(t.type ?? '')) throw new UnprocessableEntityException({ message: 'Only a listing has a listing expiry date.' });
+    if (!isAgent(user)) return;
+    const owner = ownsTransaction(user, t as never);
+    const member = (await this.prisma.team_members.findFirst({
+      where: { transaction_id: t.id, access: 'full', ...teamMemberIdentity(user) },
+    })) !== null;
+    if (!owner && !member) throw new ForbiddenException({ message: 'You do not have edit access to this transaction.' });
+  }
+
+  /** Documentation for a deal: its "Handled by" person, else everyone active in Documentation for its country. */
+  private async documentationFor(txnId: number): Promise<number[]> {
+    const t = await this.prisma.transactions.findFirst({ where: { id: txnId }, select: { doc_handler_id: true, market: true } });
+    if (!t) return [];
+    if (t.doc_handler_id) {
+      const h = await this.prisma.users.findFirst({ where: { id: t.doc_handler_id, status: 'Active' }, select: { id: true } });
+      if (h) return [h.id];
+    }
+    const market = (t.market ?? 'CA').trim().toUpperCase() || 'CA';
+    const team = await this.prisma.users.findMany({ where: { role: 'documentation', status: 'Active' }, select: { id: true, markets: true } });
+    return team.filter((u) => (u.markets ?? 'CA').split(',').map((m) => m.trim().toUpperCase()).includes(market)).map((u) => u.id);
+  }
 
   /** The live values of exactly the keys a proposal names — the baseline, and the staleness check. */
   private async currentValues(
@@ -281,7 +318,7 @@ export class EditRequestsService {
           select: { term_no: true, pct: true, amt: true },
         });
         out.precon_terms = terms.map((x) => ({ term_no: x.term_no, pct: num(x.pct), amt: num(x.amt) }));
-      } else if (k === 'closing_date' || k === 'offer_date') {
+      } else if (k === 'closing_date' || k === 'offer_date' || k === 'listing_expiry_date') {
         // A date column: compared as YYYY-MM-DD, the same shape the request carries.
         out[k] = toDateString(t[k] as Date | null);
       } else if (k === 'mls_num') {
@@ -347,6 +384,9 @@ export class EditRequestsService {
       const ids = await this.reviewers();
       const lead = await teamLeadOfRequester(this.prisma, req.requested_by);
       if (lead && !ids.includes(lead.id)) ids.push(lead.id);
+      if (req.scope === LISTING_EXPIRY_SCOPE) {
+        for (const id of await this.documentationFor(req.transaction_id)) if (!ids.includes(id)) ids.push(id);
+      }
       if (!ids.length) return;
       const named = scopeLabel(req.scope);
       const what = named ? `the ${named}` : req.scope ? `${req.scope} fields` : 'this deal';
@@ -431,9 +471,11 @@ export class EditRequestsService {
       if (kind === 'text' && (!v.trim() || v.trim().length > 255)) {
         throw new UnprocessableEntityException({ message: `Give the new ${label} (up to 255 characters).` });
       }
-      if (!String(reason ?? '').trim()) {
+      // The listing expiry date needs no reason (Sai: the agent knows the date); the others do.
+      if (scope !== LISTING_EXPIRY_SCOPE && !String(reason ?? '').trim()) {
         throw new UnprocessableEntityException({ message: `A ${label} change request needs a reason.` });
       }
+      if (scope === LISTING_EXPIRY_SCOPE) await this.mayAskExpiry(user, t);
       baseline = await this.currentValues(txnId, keys);
     } else if (scope === BROKERAGE_SCOPE || scope === CLIENTS_SCOPE) {
       const label = PARTY_SCOPES[scope];
@@ -545,12 +587,15 @@ export class EditRequestsService {
     const existing = await this.prisma.transaction_edit_requests.findUnique({ where: { id: reqId } });
     if (!existing) throw new NotFoundException({ message: `No query results for model [App\\Models\\TransactionEditRequest] ${reqId}.` });
     // A Super Admin, or - since 25 Oct 2026 - the requester's own Documentation / Accounting Team Lead.
-    if (!(await mayDecide(this.prisma, user, existing.requested_by))) {
+    if (!(await mayDecide(this.prisma, user, existing.requested_by, existing.scope))) {
       throw new ForbiddenException({ message: status === 'approved'
         ? 'Only a Super Admin or the team lead of the person who asked can approve.'
         : 'Only a Super Admin or the team lead of the person who asked can reject.' });
     }
     const byLead = !isSuperAdmin(user);
+    const expiryBefore = existing.scope === LISTING_EXPIRY_SCOPE && status === 'approved'
+      ? (await this.prisma.transactions.findUnique({ where: { id: existing.transaction_id }, select: { listing_expiry_date: true } }))?.listing_expiry_date ?? null
+      : null;
 
     /*
      * ================================================================================================
@@ -640,6 +685,14 @@ export class EditRequestsService {
      */
     await this.notifyRequester(req);
     await this.notifyOtherReviewer(req, user, byLead);
+    // An approved listing expiry: the reminder schedule follows the new date, and Documentation is
+    // told it was extended (the save inside the approval is joined, so it does not do this itself).
+    if (existing.scope === LISTING_EXPIRY_SCOPE && status === 'approved' && this.reminders) {
+      const after = (await this.prisma.transactions.findUnique({ where: { id: existing.transaction_id }, select: { listing_expiry_date: true } }))?.listing_expiry_date ?? null;
+      if ((expiryBefore?.getTime() ?? null) !== (after?.getTime() ?? null)) {
+        await this.reminders.dateChanged(existing.transaction_id, 'listing_expiry_date', expiryBefore, after, existing.requested_by_name ?? null).catch(() => undefined);
+      }
+    }
     return this.payload(req);
   }
 
@@ -658,7 +711,9 @@ export class EditRequestsService {
       let by = decider.name;
       if (byLead) {
         ids = (await this.reviewers()).filter((id) => id !== decider.id);
-        by = leadTitle(decider);
+        // A Documentation member who is not a Team Lead may decide a listing expiry request (30 Oct 2026):
+        // named by their team, not as a lead.
+        by = deskTeamLeadIdOf(decider) !== null ? leadTitle(decider) : `${decider.name} (Documentation)`;
       } else {
         const lead = await teamLeadOfRequester(this.prisma, req.requested_by);
         if (lead && lead.id !== decider.id) ids = [lead.id];

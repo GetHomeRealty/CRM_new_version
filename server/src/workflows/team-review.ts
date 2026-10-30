@@ -26,8 +26,10 @@ export async function teamLeadOfRequester(db: Db, requesterId: number | null | u
 }
 
 /** May this person approve or reject this request? A Super Admin always; a Team Lead their team's. */
-export async function mayDecide(db: Db, user: Person, requesterId: number | null | undefined): Promise<boolean> {
+export async function mayDecide(db: Db, user: Person, requesterId: number | null | undefined, scope?: string | null): Promise<boolean> {
   if (isSuperAdmin(user as never)) return true;
+  // 30 Oct 2026 (Sai): an agent's new Listing Expiry Date is approved by Documentation or a Super Admin.
+  if (scope === 'listing_expiry_date' && (user as { role?: string | null }).role === 'documentation' && requesterId !== user.id) return true;
   if (deskTeamLeadIdOf(user) === null || !requesterId || requesterId === user.id) return false;
   const lead = await teamLeadOfRequester(db, requesterId);
   return lead?.id === user.id;

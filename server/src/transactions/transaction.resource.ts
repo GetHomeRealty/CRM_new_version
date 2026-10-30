@@ -660,7 +660,7 @@ export async function transactionResource(t: LoadedTxn, ctx: ResourceCtx): Promi
      */
     const decides = new Set<number>();
     for (const r of t.transaction_edit_requests) {
-      if (r.status === 'pending' && ctx.user && (await mayDecide(ctx.prisma, ctx.user as never, r.requested_by))) decides.add(r.id);
+      if (r.status === 'pending' && ctx.user && (await mayDecide(ctx.prisma, ctx.user as never, r.requested_by, r.scope))) decides.add(r.id);
     }
     out.edit_requests = t.transaction_edit_requests.map((r) => ({
       id: r.id,

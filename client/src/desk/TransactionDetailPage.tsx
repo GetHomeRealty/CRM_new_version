@@ -331,6 +331,7 @@ export default function TransactionDetailPage() {
   const [offerReqOpen, setOfferReqOpen] = useState(false);
   // Accounting's MLS # pencil — the same dialog again, for the MLS number (2026-10-22).
   const [mlsReqOpen, setMlsReqOpen] = useState(false);
+  const [expiryReqOpen, setExpiryReqOpen] = useState(false); // 30 Oct 2026 - an agent asks for a new listing expiry date
   // Brokerage / Client cards by request (Documentation + Accounting, 2026-10-22) — which card's dialog is open.
   const [partyReq, setPartyReq] = useState<null | 'brokerage' | 'clients'>(null);
   // Documentation's Price / Deposit pencils — open PriceDepositRequestDialog.
@@ -1034,6 +1035,24 @@ export default function TransactionDetailPage() {
    * request scope. Every other role keeps the box exactly as it was.
    */
   const canRequestMls = isAccounting && !stDFT;
+  /*
+   * LISTING EXPIRY DATE BY REQUEST FOR AGENTS (Sai, 30 Oct 2026): the agent on the listing (or a full
+   * team member) no longer changes it directly - the pencil opens the request dialog, and Documentation
+   * or a Super Admin approves. Every other role keeps the box exactly as it was.
+   */
+  const canRequestExpiry = isAgent && !isSplitViewerEarly && listing && !stDFT;
+  const pendingExpiryReq = editRequests.find((r) => r.status === 'pending' && r.scope === 'listing_expiry_date');
+  const expiryLabel = canRequestExpiry ? (
+    <>Listing Expiry Date{' '}
+      <button type="button" className="row-rm" data-testid="listing-expiry-edit"
+        disabled={!!pendingExpiryReq}
+        title={pendingExpiryReq ? 'A new expiry date is awaiting approval by Documentation or a Super Admin' : 'Ask for a new listing expiry date'}
+        onClick={() => setExpiryReqOpen(true)}
+        style={{ marginLeft: 4, color: pendingExpiryReq ? 'var(--warn)' : 'var(--brand)' }}>
+        <Icon name={pendingExpiryReq ? 'clock' : 'edit'} size={14} />
+      </button>
+    </>
+  ) : 'Listing Expiry Date';
   const pendingMlsReq = editRequests.find((r) => r.status === 'pending' && r.scope === 'mls_num');
   /*
    * LISTING / CO-OP BROKERAGE AND CLIENT INFORMATION BY REQUEST (brokerage request, 2026-10-22):
@@ -1540,7 +1559,7 @@ export default function TransactionDetailPage() {
       */}
       <ReviewHistoryPanel key={reviewsKey} txnId={Number(id)}
         editRequests={txn?.edit_requests ?? []}
-        canDecide={isSuperAdmin || !!user?.desk_team_lead}
+        canDecide={isSuperAdmin || !!user?.desk_team_lead || (txn?.edit_requests ?? []).some((r) => r.can_decide)}
         onDecided={async () => { await reloadTxn(); setReviewsKey((k) => k + 1); }} />
 
       {/* India deal in a builder project: the builder's offers - suggested, confirmed or not for this deal (stage 4). */}
@@ -1702,7 +1721,7 @@ export default function TransactionDetailPage() {
                 <Field label="Trade Number"><input value={form.trade_no} readOnly style={{ background: 'var(--surface-2)' }} /></Field>
                 {listing && (<>
                   <Field label="Listing Contract Date"><input type="date" value={form.listing_contract_date} disabled={basicRo} onChange={(e) => set('listing_contract_date', e.target.value)} /></Field>
-                  <Field label="Listing Expiry Date"><input type="date" value={form.listing_expiry_date} disabled={basicRo} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
+                  <Field label={expiryLabel}><input type="date" value={form.listing_expiry_date} disabled={basicRo || isAgent} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
                 </>)}
                 {!listing && (<>
                   <Field label={offerDateLabel}><DateBox value={form.offer_date} disabled={basicRo} onChange={(v) => set('offer_date', v)} testId="basic-offer-date" /></Field>
@@ -1713,7 +1732,7 @@ export default function TransactionDetailPage() {
             {OFFER_CLOSING_LISTING_TYPES.includes(form.type) && (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginTop: 12 }}>
                 <Field label="Listing Contract Date"><input type="date" value={form.listing_contract_date} disabled={basicRo} onChange={(e) => set('listing_contract_date', e.target.value)} /></Field>
-                <Field label="Listing Expiry Date"><input type="date" value={form.listing_expiry_date} disabled={basicRo} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
+                <Field label={expiryLabel}><input type="date" value={form.listing_expiry_date} disabled={basicRo || isAgent} onChange={(e) => set('listing_expiry_date', e.target.value)} /></Field>
                 {!slHideBasic && <Field label={offerDateLabel}><DateBox value={form.offer_date} disabled={basicRo} onChange={(v) => set('offer_date', v)} testId="basic-offer-date" /></Field>}
                 {!slHideBasic && <Field label={closingDateLabel}><DateBox value={form.closing_date} disabled={basicRo} onChange={(v) => set('closing_date', v)} testId="basic-closing-date" /></Field>}
               </div>
@@ -2231,6 +2250,10 @@ export default function TransactionDetailPage() {
       {canRequestOfferDate && (
         <ClosingDateRequestDialog field="offer_date" open={offerReqOpen} onClose={() => setOfferReqOpen(false)}
           transactionId={id} current={form.offer_date || ''} onSent={reloadTxn} />
+      )}
+      {canRequestExpiry && (
+        <ClosingDateRequestDialog field="listing_expiry_date" open={expiryReqOpen} onClose={() => setExpiryReqOpen(false)}
+          transactionId={id} current={form.listing_expiry_date || ''} onSent={reloadTxn} />
       )}
       {canRequestMls && (
         <ClosingDateRequestDialog field="mls_num" open={mlsReqOpen} onClose={() => setMlsReqOpen(false)}
