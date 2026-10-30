@@ -747,7 +747,10 @@ describe('reminders before an interview', () => {
     const sweep = new RecruitmentInterviewReminderService(prisma as unknown as PrismaService, notify);
     const { interview } = await booked(24 * 60);
 
-    const moved = new Date(Date.now() + 24 * 60 * 60_000 - 11 * 60_000);
+    // A WHOLE SECOND (30 Oct 2026): the column keeps whole seconds and rounds, so a time of 12:06:59.6
+    // was stored as 12:07:00 and the body said 12:07 while this test expected 12:06 - a failure only
+    // when the run landed in the last half-second of a minute (it stopped the 29 Oct deploy once).
+    const moved = new Date(Math.floor((Date.now() + 24 * 60 * 60_000 - 11 * 60_000) / 1000) * 1000);
     await prisma.recruitment_interviews.update({ where: { id: interview.id }, data: { scheduled_at: moved } });
 
     await sweep.run();
