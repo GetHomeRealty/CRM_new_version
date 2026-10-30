@@ -98,12 +98,13 @@ async function makeTxn(tx: PrismaService, over: Record<string, unknown>, statuse
 }
 
 describe('listing expiry reminders', () => {
-  it('chases an Active listing nine days out, on both channels', async () => {
+  // 30 Oct 2026 (Sai): the countdown is 10, 8, 6, 4, 3, 2, 1 - so these use 8, 6, 4 and 3 days out.
+  it('chases an Active listing eight days out, on both channels', async () => {
     await inRollback(async (tx) => {
       const s = stubs();
       const agent = await makeAgent(tx);
       const today = anchor();
-      const txnId = await makeTxn(tx, { agent, listing_expiry_date: day(today, 9) }, ['Active']);
+      const txnId = await makeTxn(tx, { agent, listing_expiry_date: day(today, 8) }, ['Active']);
 
       const result = await sweepFor(tx, s).sweep(today);
       expect(result.expiryReminders).toBe(1);
@@ -112,7 +113,7 @@ describe('listing expiry reminders', () => {
       const rows = await tx.transaction_reminders.findMany({ where: { transaction_id: txnId } });
       expect(rows.map((r) => r.delivery_method).sort()).toEqual(['email', 'in-app']);
       expect(rows.every((r) => r.delivery_status === 'Sent')).toBe(true);
-      expect(rows[0].days_remaining).toBe(9);
+      expect(rows[0].days_remaining).toBe(8);
     });
   });
 
@@ -121,7 +122,7 @@ describe('listing expiry reminders', () => {
       const s = stubs();
       const agent = await makeAgent(tx);
       const today = anchor();
-      const txnId = await makeTxn(tx, { agent, listing_expiry_date: day(today, 5) }, ['Active']);
+      const txnId = await makeTxn(tx, { agent, listing_expiry_date: day(today, 6) }, ['Active']);
       const sweep = sweepFor(tx, s);
 
       expect((await sweep.sweep(today)).expiryReminders).toBe(1);
@@ -138,7 +139,7 @@ describe('listing expiry reminders', () => {
       const s = stubs();
       const agent = await makeAgent(tx);
       const today = anchor();
-      const txnId = await makeTxn(tx, { agent, listing_expiry_date: day(today, 5) }, ['Active']);
+      const txnId = await makeTxn(tx, { agent, listing_expiry_date: day(today, 4) }, ['Active']);
       const sweep = sweepFor(tx, s);
 
       await sweep.sweep(today);
@@ -146,7 +147,7 @@ describe('listing expiry reminders', () => {
       expect(s.sent).toHaveLength(2);
 
       const rows = await tx.transaction_reminders.findMany({ where: { transaction_id: txnId, delivery_method: 'in-app' }, orderBy: { id: 'asc' } });
-      expect(rows.map((r) => r.days_remaining)).toEqual([5, 4]);
+      expect(rows.map((r) => r.days_remaining)).toEqual([4, 3]);
     });
   });
 

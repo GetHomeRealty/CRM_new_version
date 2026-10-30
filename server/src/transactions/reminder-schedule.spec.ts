@@ -46,14 +46,13 @@ describe('listing expiry countdown', () => {
     }
   });
 
-  it('chases every day from ten down to one, with the right number each time', () => {
+  it('chases 10, 8, 6 and 4 days out, then every day for the last three (Sai, 30 Oct 2026)', () => {
     const seen: number[] = [];
-    for (let d = EXPIRY_WINDOW_DAYS; d >= 1; d--) {
+    for (let d = EXPIRY_WINDOW_DAYS + 2; d >= 1; d--) {
       const { due, daysRemaining } = expiryReminderFor(plusDays(expiry, -d), expiry);
-      expect(due).toBe(true);
-      seen.push(daysRemaining);
+      if (due) seen.push(daysRemaining);
     }
-    expect(seen).toEqual([10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
+    expect(seen).toEqual([10, 8, 6, 4, 3, 2, 1]);
   });
 
   it('stops on the day itself and after — the auto-expiry pass owns that morning', () => {

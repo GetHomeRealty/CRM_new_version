@@ -65,6 +65,7 @@ const REMINDER_CATEGORY: Record<ReminderKind, string> = {
   after_docs: 'after_closing',
   after_lawyer: 'after_closing',
   void_cheque: 'void_cheque',
+  listing_expired: 'listing_expiry',
 };
 const REMINDER_LABEL: Record<ReminderKind, string> = {
   listing_expiry: 'Listing expiry reminder',
@@ -78,6 +79,7 @@ const REMINDER_LABEL: Record<ReminderKind, string> = {
   after_docs: 'After closing - documents',
   after_lawyer: 'After closing - lawyer details',
   void_cheque: 'Client void cheque',
+  listing_expired: 'Listing expiry day',
 };
 
 /**
@@ -99,7 +101,7 @@ const redirectTo = (): string | null => {
 };
 
 /** The kinds of reminder this sweep sends. Stored in `transaction_reminders.kind`. */
-export type ReminderKind = 'listing_expiry' | 'lawyer' | 'closing' | 'condition' | 'status' | 'deposit' | 'commission' | AfterKey | 'void_cheque';
+export type ReminderKind = 'listing_expiry' | 'lawyer' | 'closing' | 'condition' | 'status' | 'deposit' | 'commission' | AfterKey | 'void_cheque' | 'listing_expired';
 
 /**
  * AFTER-CLOSING REMINDERS (Sai, 29 Oct 2026). The statuses a deal should have moved on from once its
@@ -254,6 +256,12 @@ export class ReminderSweepService {
     for (const t of rows) {
       if (!t.listing_expiry_date) continue;
       if (!this.isActive(t.transaction_statuses)) { result.skipped++; continue; }
+
+      // 30 Oct 2026 (Sai): "on the expire day the reminder should be about expired".
+      if (daysBetween(today, calendarDay(t.listing_expiry_date)) === 0) {
+        await this.listingExpiresToday(t, today, result);
+        continue;
+      }
 
       const { due, daysRemaining } = expiryReminderFor(today, calendarDay(t.listing_expiry_date), days);
       if (!due) continue;
@@ -1068,6 +1076,63 @@ export class ReminderSweepService {
     }
   }
 
+  // ---------------------------------------------------------------- listing expiry day / extended
+
+  /**
+   * THE EXPIRY DAY (Sai, 30 Oct 2026): an Active listing whose expiry date is today. The agent is told it
+   * expires today (email, bell, phone) - extend it or relist - and the office gets a bell + phone message:
+   * the deal's Documentation "Handled by" person, else everyone in Documentation for its country. The
+   * status changes to Expired the next morning, by the automatic expiry, as before.
+   */
+  private async listingExpiresToday(
+    t: { id: number; trade_no: string | null; property: string | null; agent: string | null; agent_user_id: number | null; type: string | null; listing_expiry_date: Date | null },
+    today: Date,
+    result: SweepResult,
+  ): Promise<void> {
+    const day = dbDay(startOfDay(today));
+    const where = t.property ?? t.trade_no ?? '';
+    const summary = `Listing expires today - extend it or relist - ${where}`.trim();
+    await this.deliver({
+      txnId: t.id, kind: 'listing_expired', variant: null, day, daysRemaining: 0,
+      agentName: t.agent, agentUserId: t.agent_user_id,
+      event: 'transaction.listing_expired',
+      vars: {
+        deal_number: t.trade_no ?? String(t.id),
+        property_address: t.property ?? '-',
+        listing_type: t.type ?? '-',
+        expiry_date: toDateString(t.listing_expiry_date) ?? '',
+        agent_name: t.agent ?? 'there',
+      },
+      summary, result,
+      onSent: () => { result.expiryReminders++; },
+    });
+    await this.tellOffice(t.id, `Listing expires today, not extended - ${where} (${t.agent ?? 'no agent'})`.trim(), `listing-expires-${t.id}-${day.toISOString().slice(0, 10)}`);
+  }
+
+  /** The office hears that a listing's expiry was moved later, and by whom. */
+  private async listingExtended(txnId: number, from: Date, to: Date, changedBy: string | null): Promise<void> {
+    const t = await this.prisma.transactions.findFirst({
+      where: { id: txnId, deleted_at: null },
+      select: { trade_no: true, property: true, type: true, agent: true },
+    });
+    if (!t || !/listing/i.test(t.type ?? '')) return;
+    const title = `Listing extended - ${t.property ?? t.trade_no ?? ''}: expiry ${toDateString(from)} -> ${toDateString(to)}${changedBy ? `, by ${changedBy}` : ''}`;
+    await this.tellOffice(txnId, title, `listing-extended-${txnId}-${toDateString(to)}`);
+  }
+
+  /** A bell + phone message for the office about one deal: Documentation "Handled by", else the team. */
+  private async tellOffice(txnId: number, title: string, dedupeKey: string): Promise<void> {
+    if (!this.dispatcher) return;
+    const t = await this.prisma.transactions.findFirst({ where: { id: txnId }, select: { market: true, doc_handler_id: true } });
+    if (!t) return;
+    for (const p of await this.documentationFor(t)) {
+      await this.dispatcher.dispatch({
+        category: 'listing_expiry', userId: p.id, title,
+        link: areaPath('desk', `transactions/${txnId}`), dedupeKey, channels: ['in_app', 'push'],
+      }).catch(() => null);
+    }
+  }
+
   // ---------------------------------------------------------------- retries
 
   /**
@@ -1184,7 +1249,7 @@ export class ReminderSweepService {
     // 29 Oct 2026 - a reminder switched off on the Triggers screen is not retried either.
     // The void cheque reminder goes daily while it is due, so a failed one is not retried - the next
     // day's reminder is the retry, rebuilt from the deal as it then stands.
-    if (kind === 'void_cheque') return null;
+    if (kind === 'void_cheque' || kind === 'listing_expired') return null;
     if ((AFTER_KEYS as readonly string[]).includes(kind)) {
       const key = kind as AfterKey;
       if (!rules[key].on || !t.closing_date) return null;
@@ -1700,7 +1765,13 @@ export class ReminderSweepService {
    * construction. What this does is record that it happened, so the trail explains why the cadence
    * changed, and clear today's claim so a new date can be chased today rather than tomorrow.
    */
-  async dateChanged(txnId: number, field: 'closing_date' | 'listing_expiry_date', from: Date | null, to: Date | null): Promise<void> {
+  async dateChanged(txnId: number, field: 'closing_date' | 'listing_expiry_date', from: Date | null, to: Date | null, changedBy: string | null = null): Promise<void> {
+    // 30 Oct 2026 (Sai) - the office hears when a listing's expiry is moved later.
+    if (field === 'listing_expiry_date' && from && to && calendarDay(to) > calendarDay(from)) {
+      await this.listingExtended(txnId, from, to, changedBy).catch((err) => {
+        this.log.error(`Could not announce the extension of listing ${txnId}: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }
     const kind = field === 'closing_date' ? 'lawyer' : 'listing_expiry';
     await this.prisma.transaction_reminders.deleteMany({
       where: { transaction_id: txnId, kind, scheduled_for: { gte: dbDay(startOfDay(new Date())) } },

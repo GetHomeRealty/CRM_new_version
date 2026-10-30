@@ -48,8 +48,11 @@ export function daysBetween(from: Date, to: Date): number {
 
 /** The first countdown message goes out this many days before expiry. */
 export const EXPIRY_WINDOW_DAYS = 10;
-/** The same ten-to-one countdown as a list of days, so the Triggers screen can change it (29 Oct 2026). */
-export const EXPIRY_REMINDER_DAYS: readonly number[] = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
+/**
+ * The countdown days, changeable on the Triggers screen (29 Oct 2026). Sai, 30 Oct 2026: 10, 8, 6, 4,
+ * then every day for the last three. The expiry day itself has its own "expires today" message.
+ */
+export const EXPIRY_REMINDER_DAYS: readonly number[] = [10, 8, 6, 4, 3, 2, 1];
 
 /**
  * Whether a listing expiring on `expiry` should be chased today, and with what number.

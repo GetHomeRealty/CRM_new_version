@@ -8,7 +8,7 @@ import {
   DEFAULT_AFTER, afterClosingDue, applyRulesPatch, defaultRules, readRules,
 } from './reminder-rules';
 import {
-  CLOSING_REMINDER_DAYS, CONDITION_WINDOW_DAYS, DEPOSIT_GRACE_DAYS, EXPIRY_WINDOW_DAYS, LAWYER_REMINDER_DAYS,
+  CLOSING_REMINDER_DAYS, CONDITION_WINDOW_DAYS, DEPOSIT_GRACE_DAYS, LAWYER_REMINDER_DAYS,
   closingReminderFor, conditionReminderFor, depositReminderFor, expiryReminderFor, lawyerReminderFor,
 } from './reminder-schedule';
 
@@ -122,7 +122,8 @@ describe('reminder rules - defaults are exactly what ran before', () => {
     expect(r.lawyer).toEqual({ on: true, days: [30, 23, 15, 11, 7, 5, 3, 1, 0] });
     expect(r.closing).toEqual({ on: true, days: [10, 7, 4, 3, 2, 1, 0] });
     expect(r.condition).toEqual({ on: true, days: [7, 6, 5, 4, 3, 2, 1, 0] });
-    expect(r.listing_expiry).toEqual({ on: true, days: [10, 9, 8, 7, 6, 5, 4, 3, 2, 1] });
+    // 30 Oct 2026 (Sai): 10, 8, 6, 4, 3, 2, 1 (was every day from 10).
+    expect(r.listing_expiry).toEqual({ on: true, days: [10, 8, 6, 4, 3, 2, 1] });
     expect(r.deposit).toEqual({ on: true, days: 5 });
     expect(r.commission).toEqual({ on: true });
     // The after-closing ones start OFF (Sai, answer A) - switched on from the Triggers screen.
@@ -137,7 +138,7 @@ describe('reminder rules - defaults are exactly what ran before', () => {
       expect(closingReminderFor(today, d).due).toBe(CLOSING_REMINDER_DAYS.includes(n));
       expect(lawyerReminderFor(today, d).due).toBe(LAWYER_REMINDER_DAYS.includes(n));
       expect(conditionReminderFor(today, d).due).toBe(n >= 0 && n <= CONDITION_WINDOW_DAYS);
-      expect(expiryReminderFor(today, d).due).toBe(n >= 1 && n <= EXPIRY_WINDOW_DAYS);
+      expect(expiryReminderFor(today, d).due).toBe([10, 8, 6, 4, 3, 2, 1].includes(n));
       expect(depositReminderFor(today, day(today, -n)).due).toBe(n === DEPOSIT_GRACE_DAYS);
     }
   });

@@ -101,7 +101,7 @@ const DAYS_ROWS: { key: DaysKey; label: string; unit: string; help: string }[] =
     key: 'listing_expiry',
     label: 'Listing expiry reminders',
     unit: 'days before the expiry date (1 or more - on the day itself the listing is expired)',
-    help: 'An Active listing approaching its expiry date. The automatic change to Expired on the day happens whether this is on or off.',
+    help: 'An Active listing approaching its expiry date. On the expiry day itself the agent is told it expires today, and Documentation (the "Handled by" person, else the team) gets a bell message; Documentation is also told whenever a listing\'s expiry date is moved later (extended). The automatic change to Expired the next day happens whether this is on or off.',
   },
 ];
 

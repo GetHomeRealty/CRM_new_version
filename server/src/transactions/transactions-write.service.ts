@@ -1930,7 +1930,7 @@ export class TransactionsWriteService {
       const was = datesBefore?.[field] ?? null;
       const now = datesAfter?.[field] ?? null;
       if (was?.getTime() !== now?.getTime()) {
-        if (!joined) void this.reminders.dateChanged(txnId, field, was, now);
+        if (!joined) void this.reminders.dateChanged(txnId, field, was, now, opts.quiet ? null : (user?.name ?? null));
       }
     }
 

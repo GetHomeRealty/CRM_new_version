@@ -963,6 +963,19 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
       + '{{ transaction_button }}'
       + '<p>{{ company_name }}</p>',
   },
+  /** 30 Oct 2026 (Sai) - the expiry day itself: the listing expires today and has not been extended. */
+  'transaction.listing_expired': {
+    module: 'Transactions',
+    label: 'Transactions — Listing Expires Today',
+    variables: ['agent_name', 'deal_number', 'property_address', 'listing_type', 'expiry_date', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: 'Listing expires today — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ agent_name }},</p>'
+      + '<p>Your listing on <strong>{{ property_address }}</strong> reaches its expiry date <strong>today ({{ expiry_date }})</strong> and has not been extended.</p>'
+      + '<p>If it is being extended or relisted, update the Listing Expiry Date on the deal today. Otherwise it is marked <strong>Expired</strong> tomorrow morning.</p>'
+      + '{{ transaction_button }}'
+      + '<p>Regards,<br>{{ company_name }}</p>',
+  },
   /** Daily countdown to a listing's expiry date, from ten days out. */
   'transaction.listing_expiry_reminder': {
     module: 'Transactions',
