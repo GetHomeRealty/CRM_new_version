@@ -955,16 +955,17 @@ export class ReminderSweepService {
    * Financial shows money Payable to Client, and whose client void cheque has not been received - not
    * uploaded in Agent Payment Readiness and "Client Void cheque Received" not Yes in Admin Activities.
    * The agent and every co-agent are reminded every day from 7 days before closing to the closing day,
-   * then every day after closing (up to 60 days) while it is still missing. All of it editable on
-   * Triggers. After closing, only deals closing on or after the go-live day are chased.
+   * then for 15 days after closing, every other day plus every Tuesday and Thursday, never on a Wednesday
+   * or Friday (30 Oct - see voidChequeDays). All of it editable on Triggers. After closing, only deals
+   * closing on or after the go-live day are chased.
    */
   private async voidCheques(today: Date, result: SweepResult, rules: ReminderRules): Promise<void> {
     if (!this.commission) return;
     const rule = rules.void_cheque;
     const start = startOfDay(today);
-    const before = Math.max(...rule.days, 0);
+    const before = rule.before;
     const held = rules.after_closing_from ? ymdDay(rules.after_closing_from) : start;
-    const byWindow = new Date(start.getFullYear(), start.getMonth(), start.getDate() - rule.until);
+    const byWindow = new Date(start.getFullYear(), start.getMonth(), start.getDate() - rule.after);
     const lower = held > byWindow ? held : byWindow;
     const earliest = lower < start ? lower : start;
     const latest = new Date(start.getFullYear(), start.getMonth(), start.getDate() + before);

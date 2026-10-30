@@ -43,7 +43,7 @@ export interface ReminderRules {
   listing_expiry: ReminderDaysRule;
   deposit: { on: boolean; days: number };
   commission: { on: boolean };
-  void_cheque: { on: boolean; days: number[]; every: number; until: number };
+  void_cheque: { on: boolean; before: number; after: number; gap: number; never: number[]; always: number[] };
   after_status: ReminderAfterRule;
   after_docs: ReminderAfterRule;
   after_lawyer: ReminderAfterRule;

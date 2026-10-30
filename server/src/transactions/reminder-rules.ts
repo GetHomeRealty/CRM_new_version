@@ -36,12 +36,19 @@ export const AFTER_KEYS: readonly AfterKey[] = ['after_status', 'after_docs', 'a
 
 export interface DaysRule { on: boolean; days: number[] }
 /**
- * THE CLIENT VOID CHEQUE (Sai, 29 Oct 2026): a Sold sale listing / Leased lease listing with money
- * Payable to Client and no void cheque yet. `days` before closing (0 = the closing day), then after
- * closing every `every` days up to `until` days, while it is still not received.
+ * THE CLIENT VOID CHEQUE (Sai, 29-30 Oct 2026): a Sold sale listing / Leased lease listing with money
+ * Payable to Client and no void cheque yet, while it is still not received:
+ *
+ *   before closing  every day from `before` days out to the closing day,
+ *   after closing   for `after` days, `gap` days after the last reminder sent,
+ *   never           on the `never` weekdays (Wednesday and Friday: payment days),
+ *   always          on the `always` weekdays (Tuesday and Thursday: the day before each payment day).
+ *
+ * Weekdays are numbered as JavaScript numbers them: Sunday 0 ... Saturday 6.
  */
-export interface VoidChequeRule { on: boolean; days: number[]; every: number; until: number }
-export const DEFAULT_VOID_CHEQUE: VoidChequeRule = { on: true, days: [7, 6, 5, 4, 3, 2, 1, 0], every: 1, until: MAX_REMINDER_DAYS };
+export interface VoidChequeRule { on: boolean; before: number; after: number; gap: number; never: number[]; always: number[] }
+export const DEFAULT_VOID_CHEQUE: VoidChequeRule = { on: true, before: 7, after: 15, gap: 2, never: [3, 5], always: [2, 4] };
+export const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 export interface AfterRule { on: boolean; first: number; every: number; until: number }
 
 export interface ReminderRules {
@@ -102,7 +109,7 @@ export function defaultRules(): ReminderRules {
     listing_expiry: { on: true, days: sortDays(EXPIRY_REMINDER_DAYS) },
     deposit: { on: true, days: DEPOSIT_GRACE_DAYS },
     commission: { on: true },
-    void_cheque: { ...DEFAULT_VOID_CHEQUE, days: [...DEFAULT_VOID_CHEQUE.days] },
+    void_cheque: { ...DEFAULT_VOID_CHEQUE, never: [...DEFAULT_VOID_CHEQUE.never], always: [...DEFAULT_VOID_CHEQUE.always] },
     after_status: { ...DEFAULT_AFTER },
     after_docs: { ...DEFAULT_AFTER },
     after_lawyer: { ...DEFAULT_AFTER },
@@ -149,13 +156,18 @@ export function readRules(flags: Record<string, unknown>): ReminderRules {
 
   const vc = isObj(stored.void_cheque) ? stored.void_cheque : {};
   if (typeof vc.on === 'boolean') out.void_cheque.on = vc.on;
-  if (Array.isArray(vc.days)) {
-    const days = vc.days.map((d) => wholeIn(d, 0, MAX_REMINDER_DAYS));
-    if (days.length > 0 && days.every((d) => d !== null) && new Set(days).size === days.length) out.void_cheque.days = sortDays(days as number[]);
-  }
-  const vcEvery = wholeIn(vc.every, 1, MAX_REMINDER_DAYS);
-  const vcUntil = wholeIn(vc.until, 1, MAX_REMINDER_DAYS);
-  if (vcEvery !== null && vcUntil !== null) { out.void_cheque.every = vcEvery; out.void_cheque.until = vcUntil; }
+  // Anything missing or unreadable (including the 29 Oct shape: days / every / until) is the default.
+  for (const f of ['before', 'after'] as const) { const n = wholeIn(vc[f], 0, MAX_REMINDER_DAYS); if (n !== null) out.void_cheque[f] = n; }
+  const vcGap = wholeIn(vc.gap, 1, MAX_REMINDER_DAYS);
+  if (vcGap !== null) out.void_cheque.gap = vcGap;
+  const weekdays = (v: unknown): number[] | null => {
+    if (!Array.isArray(v)) return null;
+    const w = v.map((d) => wholeIn(d, 0, 6));
+    return w.every((d) => d !== null) ? [...new Set(w as number[])].sort((a, b) => a - b) : null;
+  };
+  const never = weekdays(vc.never);
+  const always = weekdays(vc.always);
+  if (never && always && !never.some((d) => always.includes(d))) { out.void_cheque.never = never; out.void_cheque.always = always; }
 
   for (const key of AFTER_KEYS) {
     const r = isObj(stored[key]) ? stored[key] : {};
@@ -180,12 +192,12 @@ export function readRules(flags: Record<string, unknown>): ReminderRules {
  * Read a list of days typed on the Triggers screen ("30, 23, 15" or [30, 23, 15]).
  * Blank goes back to the default days. Returns the error to show instead when it cannot be used.
  */
-function parseDays(key: DaysKey | 'void_cheque', raw: unknown): { days: number[] } | { error: string } {
-  const lo = key === 'void_cheque' ? 0 : MIN_DAY[key];
+function parseDays(key: DaysKey, raw: unknown): { days: number[] } | { error: string } {
+  const lo = MIN_DAY[key];
   const parts: unknown[] = Array.isArray(raw)
     ? raw
     : String(raw ?? '').split(/[\s,;]+/).filter((p) => p !== '').map((p) => (/^\d+$/.test(p) ? Number(p) : p));
-  if (parts.length === 0) return { days: sortDays(key === 'void_cheque' ? DEFAULT_VOID_CHEQUE.days : DEFAULT_DAYS[key]) };
+  if (parts.length === 0) return { days: sortDays(DEFAULT_DAYS[key]) };
   const days: number[] = [];
   for (const p of parts) {
     const n = wholeIn(typeof p === 'string' && /^\d+$/.test(p) ? Number(p) : p, lo, MAX_REMINDER_DAYS);
@@ -249,16 +261,25 @@ export function applyRulesPatch(current: ReminderRules, body: Record<string, unk
     const r = body.void_cheque;
     const on = onOf('void_cheque', r.on);
     if (on !== undefined) next.void_cheque.on = on;
-    if (r.days !== undefined) {
-      const p = parseDays('void_cheque', r.days);
-      if ('error' in p) errors.push(p.error); else next.void_cheque.days = p.days;
-    }
-    for (const f of ['every', 'until'] as const) {
+    for (const f of ['before', 'after', 'gap'] as const) {
       if (r[f] === undefined) continue;
       const n = numberIn(r[f]);
+      const lo = f === 'gap' ? 1 : 0;
       if (n === null) next.void_cheque[f] = DEFAULT_VOID_CHEQUE[f];
-      else if (n === 'bad' || n < 1 || n > MAX_REMINDER_DAYS) errors.push(`${RULE_LABEL.void_cheque}: use whole numbers from 1 to ${MAX_REMINDER_DAYS}.`);
+      else if (n === 'bad' || n < lo || n > MAX_REMINDER_DAYS) errors.push(`${RULE_LABEL.void_cheque}: use whole numbers from ${lo} to ${MAX_REMINDER_DAYS}.`);
       else next.void_cheque[f] = n;
+    }
+    for (const f of ['never', 'always'] as const) {
+      if (r[f] === undefined) continue;
+      const v = r[f];
+      if (!Array.isArray(v) || !v.every((d) => typeof d === 'number' && Number.isInteger(d) && d >= 0 && d <= 6)) {
+        errors.push(`${RULE_LABEL.void_cheque}: choose weekdays.`);
+      } else {
+        next.void_cheque[f] = [...new Set(v as number[])].sort((a, b) => a - b);
+      }
+    }
+    if (next.void_cheque.never.some((d) => next.void_cheque.always.includes(d))) {
+      errors.push(`${RULE_LABEL.void_cheque}: a day cannot be both "never" and "always".`);
     }
   }
 
@@ -294,7 +315,8 @@ export function describeRule(rules: ReminderRules, key: keyof typeof RULE_LABEL)
   if (key === 'deposit') return `${state(rules.deposit.on)} - ${rules.deposit.days} days after the offer`;
   if (key === 'void_cheque') {
     const v = rules.void_cheque;
-    return `${state(v.on)} - ${v.days.join(', ')} before closing, then every ${v.every} day(s) after closing up to day ${v.until}`;
+    const names = (ds: number[]) => ds.map((d) => WEEKDAY_NAMES[d]).join(' & ') || 'none';
+    return `${state(v.on)} - daily from ${v.before} days before closing, then every ${v.gap} days for ${v.after} days after; never ${names(v.never)}; always ${names(v.always)}`;
   }
   if ((AFTER_KEYS as readonly string[]).includes(key)) {
     const r = rules[key as AfterKey];
@@ -336,12 +358,32 @@ export function afterClosingDue(today: Date, closing: Date, rule: AfterRule): { 
 }
 
 /**
- * Whether the void cheque reminder is due today for a deal closing on `closing`: on the listed days
- * before closing (0 = the closing day), then every `every` days after it, up to `until` days after.
+ * The days, counted from closing (-7 = a week before, 0 = the closing day, 5 = five days after), on
+ * which the void cheque reminder goes for a deal closing on `closing`. Worked out from the closing date
+ * alone, so every night's run gives the same answer:
+ *
+ *   before closing  every day from `before` days out to the closing day, except the `never` weekdays;
+ *   after closing   a day is sent when it is not a `never` weekday AND (it is an `always` weekday OR it
+ *                   is at least `gap` days since the last day sent) - so never more than `gap` days apart
+ *                   apart from the skipped weekdays, and the `always` weekdays are never missed.
+ *
+ * Sai's example, closing Wed 11 Nov 2026: Thu 5, Sat 7, Sun 8, Mon 9, Tue 10; after: Thu 12, Sat 14,
+ * Mon 16, Tue 17, Thu 19, Sat 21, Mon 23, Tue 24, Thu 26.
  */
+export function voidChequeDays(closing: Date, rule: VoidChequeRule): number[] {
+  const out: number[] = [];
+  let last = -Infinity;
+  for (let n = -rule.before; n <= rule.after; n++) {
+    const d = new Date(closing.getFullYear(), closing.getMonth(), closing.getDate() + n);
+    const wd = d.getDay();
+    if (rule.never.includes(wd)) continue;
+    if (n <= 0 || rule.always.includes(wd) || n - last >= rule.gap) { out.push(n); last = n; }
+  }
+  return out;
+}
+
+/** Whether the void cheque reminder is due today for a deal closing on `closing`. */
 export function voidChequeDue(today: Date, closing: Date, rule: VoidChequeRule): { due: boolean; daysRemaining: number } {
   const daysRemaining = daysBetween(today, closing);
-  if (daysRemaining >= 0) return { due: rule.days.includes(daysRemaining), daysRemaining };
-  const after = -daysRemaining;
-  return { due: after <= rule.until && (after - 1) % rule.every === 0, daysRemaining };
+  return { due: voidChequeDays(closing, rule).includes(-daysRemaining), daysRemaining };
 }
