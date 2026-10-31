@@ -95,7 +95,7 @@ const DAYS_ROWS: { key: DaysKey; label: string; unit: string; help: string }[] =
     key: 'condition',
     label: 'Condition deadlines',
     unit: 'days before the deadline (0 = the deadline day)',
-    help: 'Conditions reaching their deadline are collected per deal and the agent gets one message listing them. A condition marked Fulfilled or Waived is not chased.',
+    help: 'Conditions reaching their deadline are collected per deal and the agent gets one message listing them, asking for the Waiver, Notice of Fulfilment or an Amendment. If a condition is still open after its deadline, the agent is reminded every other day for 15 days and Documentation gets a bell and phone alert. A condition marked Fulfilled or Waived, or whose document is uploaded, is not chased.',
   },
   {
     key: 'listing_expiry',

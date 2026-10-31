@@ -99,7 +99,7 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
   {
     key: 'condition_deadline',
     label: 'Condition deadlines',
-    description: 'A condition on one of your deals is reaching its deadline.',
+    description: 'A condition on one of your deals is reaching its deadline, or is still open after it.',
     // TD-009. One message per deal per day covering every condition due, not one per condition.
     channels: { in_app: 'live', email: 'live', push: 'live' },
     areas: ['desk'],

@@ -123,6 +123,30 @@ export function conditionReminderFor(today: Date, deadline: Date, days: readonly
   return { due: days.includes(daysRemaining), daysRemaining };
 }
 
+/**
+ * A CONDITION STILL OPEN AFTER ITS DEADLINE (Sai, 31 Oct 2026): "every other day for 15 days" - 1, 3,
+ * 5 ... 15 days after the deadline - then it stops. Same switch as the countdown (Triggers).
+ */
+export const CONDITION_OVERDUE_DAYS: readonly number[] = [1, 3, 5, 7, 9, 11, 13, 15];
+
+/** Whether a condition whose deadline was `deadline` is chased today, and how many days ago that was. */
+export function conditionOverdueFor(today: Date, deadline: Date, days: readonly number[] = CONDITION_OVERDUE_DAYS): { due: boolean; daysPast: number } {
+  const daysPast = daysBetween(deadline, today);
+  return { due: days.includes(daysPast), daysPast };
+}
+
+/** "1 day ago" / "3 days ago". */
+export function agoPhrase(daysPast: number): string {
+  return daysPast === 1 ? '1 day ago' : `${daysPast} days ago`;
+}
+
+const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** A stored calendar date as "05 Nov", the way Sai writes it. */
+export function shortDay(d: Date): string {
+  const [, m, day] = d.toISOString().slice(0, 10).split('-');
+  return `${day} ${SHORT_MONTHS[Number(m) - 1]}`;
+}
+
 // ---------------------------------------------------------------- deposit outstanding
 
 /**

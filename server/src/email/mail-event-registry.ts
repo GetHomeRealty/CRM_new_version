@@ -764,17 +764,43 @@ export const MAIL_EVENTS: Record<string, MailEvent> = {
   'transaction.condition_deadline_reminder': {
     module: 'Transactions',
     label: 'Transactions — Condition Deadline Reminder',
-    variables: ['agent_name', 'deal_number', 'property_address', 'condition_list', 'condition_count', 'deadline_date', 'days_remaining', 'deadline_phrase', 'transaction_button', 'company_name', 'current_date'],
+    variables: ['agent_name', 'deal_number', 'property_address', 'condition_list', 'condition_count', 'deadline_date', 'days_remaining', 'deadline_phrase', 'condition_sentence', 'transaction_button', 'company_name', 'current_date'],
     default_subject: 'Condition {{ deadline_phrase }} — {{ property_address }} ({{ deal_number }})',
+    /*
+     * 31 Oct 2026 (Sai): the message asks for the document. The stored copy on live is moved to this
+     * wording by migration 20261031100000_condition_reminder_wording - only while nobody has edited it.
+     */
     default_body_html:
       '<p>Hello {{ agent_name }},</p>'
-      + '<p>{{ condition_count }} condition(s) on <strong>{{ property_address }}</strong> are <strong>{{ deadline_phrase }}</strong>.</p>'
+      + '<p>{{ condition_sentence }} Upload the signed Waiver or Notice of Fulfilment, or an Amendment if the deadline is being extended.</p>'
       + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
       + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Transaction</td><td style="padding:4px 0;font-weight:600">{{ deal_number }}</td></tr>'
       + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Property</td><td style="padding:4px 0;font-weight:600">{{ property_address }}</td></tr>'
       + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Conditions</td><td style="padding:4px 0;font-weight:600">{{ condition_list }}</td></tr>'
       + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Deadline</td><td style="padding:4px 0;font-weight:600">{{ deadline_date }}</td></tr>'
       + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Days remaining</td><td style="padding:4px 0;font-weight:600">{{ days_remaining }}</td></tr>'
+      + '</table>'
+      + '{{ transaction_button }}'
+      + '<p>{{ company_name }}</p>',
+  },
+  /**
+   * 31 Oct 2026 (Sai) - a condition still open after its deadline: every other day for 15 days after
+   * it, to the agent. Documentation gets a bell + phone line, not this email.
+   */
+  'transaction.condition_overdue': {
+    module: 'Transactions',
+    label: 'Transactions — Condition Past Its Deadline',
+    variables: ['agent_name', 'deal_number', 'property_address', 'condition_list', 'condition_count', 'deadline_date', 'days_past', 'condition_sentence', 'transaction_button', 'company_name', 'current_date'],
+    default_subject: 'Condition still open past its deadline — {{ property_address }} ({{ deal_number }})',
+    default_body_html:
+      '<p>Hello {{ agent_name }},</p>'
+      + '<p>{{ condition_sentence }} Upload the signed Waiver or Notice of Fulfilment, or an Amendment if the deadline was extended.</p>'
+      + '<table style="border-collapse:collapse;font-size:14px;margin:10px 0">'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Transaction</td><td style="padding:4px 0;font-weight:600">{{ deal_number }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Property</td><td style="padding:4px 0;font-weight:600">{{ property_address }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Conditions</td><td style="padding:4px 0;font-weight:600">{{ condition_list }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Deadline</td><td style="padding:4px 0;font-weight:600">{{ deadline_date }}</td></tr>'
+      + '<tr><td style="padding:4px 14px 4px 0;color:#6b7280">Days past the deadline</td><td style="padding:4px 0;font-weight:600">{{ days_past }}</td></tr>'
       + '</table>'
       + '{{ transaction_button }}'
       + '<p>{{ company_name }}</p>',

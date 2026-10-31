@@ -9,7 +9,7 @@ import { areaPath } from '../common/domain';
 import { toDateString } from '../common/serialize';
 import { missingLawyerParties, tracksBothLawyers } from './lawyer-details';
 import { isSettledDeal } from './deal-state';
-import { docStatus } from '../reports/report-documents';
+import { docStatus, isReceived } from '../reports/report-documents';
 import { AFTER_KEYS, type AfterKey, type ReminderRules, afterClosingDue, afterHeldFrom, readRules, voidChequeDue, ymdDay } from './reminder-rules';
 import { CommissionService } from './commission.service';
 import { commissionInclude, normalizeCommissionTxn } from './commission.loader';
@@ -18,7 +18,7 @@ import {
   LAWYER_TEMPLATE,
   closingPhrase, closingReminderFor, conditionReminderFor, daysBetween, deadlinePhrase, expiryPhrase,
   expiryReminderFor, hasExpired, lawyerReminderFor, lawyerVariant, startOfDay, calendarDay, dbDay,
-  depositReminderFor,
+  depositReminderFor, conditionOverdueFor, agoPhrase, shortDay, CONDITION_OVERDUE_DAYS,
 } from './reminder-schedule';
 
 /**
@@ -58,6 +58,7 @@ const REMINDER_CATEGORY: Record<ReminderKind, string> = {
   lawyer: 'lawyer_details',
   closing: 'closing_reminders',
   condition: 'condition_deadline',
+  condition_overdue: 'condition_deadline',
   status: 'status_change',
   deposit: 'deposit_outstanding',
   commission: 'commission_received',
@@ -72,6 +73,7 @@ const REMINDER_LABEL: Record<ReminderKind, string> = {
   lawyer: 'Lawyer details reminder',
   closing: 'Closing date reminder',
   condition: 'Condition deadline reminder',
+  condition_overdue: 'Condition past its deadline',
   status: 'Deal status change',
   deposit: 'Deposit not recorded',
   commission: 'Commission received',
@@ -101,7 +103,7 @@ const redirectTo = (): string | null => {
 };
 
 /** The kinds of reminder this sweep sends. Stored in `transaction_reminders.kind`. */
-export type ReminderKind = 'listing_expiry' | 'lawyer' | 'closing' | 'condition' | 'status' | 'deposit' | 'commission' | AfterKey | 'void_cheque' | 'listing_expired';
+export type ReminderKind = 'listing_expiry' | 'lawyer' | 'closing' | 'condition' | 'condition_overdue' | 'status' | 'deposit' | 'commission' | AfterKey | 'void_cheque' | 'listing_expired';
 
 /**
  * AFTER-CLOSING REMINDERS (Sai, 29 Oct 2026). The statuses a deal should have moved on from once its
@@ -138,6 +140,63 @@ export function conditionLabel(c: { type: string | null; custom_name: string | n
   return type === '' ? 'Condition' : type;
 }
 
+/** The fields of a condition's own document (its "Condition: ..." row) that say whether it is in. */
+export const CONDITION_DOC_SELECT = { condition_id: true, file_path: true, files: true, status: true, validation: true } as const;
+export interface ConditionDoc { condition_id: number | null; file_path: string | null; files: string | null; status: string; validation: string }
+
+/**
+ * THE CONDITION'S DOCUMENT IS IN (Sai, 31 Oct 2026: "stops when that condition's document is
+ * uploaded"): its "Condition: ..." document holds a submitted file, or the office has marked it
+ * Received or Valid. A file the office rejected (Invalid) does not count - the condition is still
+ * owed. An agent's draft that was never submitted does not count either: nobody has it yet.
+ */
+export function conditionDocumentIn(conditionId: number, docs: readonly ConditionDoc[]): boolean {
+  return docs.some((d) => {
+    if (d.condition_id !== conditionId) return false;
+    const state = docStatus(d);
+    if (state === 'Invalid') return false;
+    let files = 0;
+    try { const parsed = JSON.parse(d.files ?? '[]') as unknown; files = Array.isArray(parsed) ? parsed.length : 0; } catch { files = 0; }
+    return (d.file_path ?? '').trim() !== '' || files > 0 || state === 'Valid' || isReceived({ raw_status: d.status });
+  });
+}
+
+/** "Financing" / "Financing and Inspection" / "Financing, Inspection and Appraisal". */
+function joinNames(names: readonly string[]): string {
+  return names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/**
+ * The agent's sentence before the deadline (Sai, 31 Oct 2026): "The Financing condition on 12 Main
+ * St is due in 3 days (05 Nov)." Several due the same day read as one; different days are listed.
+ */
+export function conditionDueSentence(place: string, due: readonly { label: string; deadline: Date; daysRemaining: number }[]): string {
+  const sameDay = due.every((d) => d.daysRemaining === due[0].daysRemaining);
+  if (sameDay) {
+    const many = due.length > 1;
+    return `The ${joinNames(due.map((d) => d.label))} condition${many ? 's' : ''} on ${place} ${many ? 'are' : 'is'} ${deadlinePhrase(due[0].daysRemaining)} (${shortDay(due[0].deadline)}).`;
+  }
+  return `Conditions on ${place} are coming up: ${due.map((d) => `${d.label} ${deadlinePhrase(d.daysRemaining)} (${shortDay(d.deadline)})`).join(', ')}.`;
+}
+
+/** After the deadline: "The Financing condition on 12 Main St was due 2 days ago (05 Nov) and is still open." */
+export function conditionOverdueSentence(place: string, open: readonly { label: string; deadline: Date; daysPast: number }[]): string {
+  const sameDay = open.every((d) => d.daysPast === open[0].daysPast);
+  if (sameDay) {
+    const many = open.length > 1;
+    return `The ${joinNames(open.map((d) => d.label))} condition${many ? 's' : ''} on ${place} ${many ? 'were' : 'was'} due ${agoPhrase(open[0].daysPast)} (${shortDay(open[0].deadline)}) and ${many ? 'are' : 'is'} still open.`;
+  }
+  return `Conditions on ${place} are still open past their deadline: ${open.map((d) => `${d.label} due ${shortDay(d.deadline)} (${agoPhrase(d.daysPast)})`).join(', ')}.`;
+}
+
+/** The bell / phone line: "Financing condition still open, 2 days past its deadline - 12 Main St". */
+export function conditionOverdueSummary(place: string, open: readonly { label: string; daysPast: number }[]): string {
+  const many = open.length > 1;
+  const sameDay = open.every((d) => d.daysPast === open[0].daysPast);
+  const past = sameDay ? `${open[0].daysPast === 1 ? '1 day' : `${open[0].daysPast} days`} past ${many ? 'their' : 'its'} deadline` : 'past their deadlines';
+  return `${joinNames(open.map((d) => d.label))} condition${many ? 's' : ''} still open, ${past} - ${place}`.trim();
+}
+
 export interface SweepResult {
   expiryReminders: number;
   expired: number;
@@ -146,6 +205,8 @@ export interface SweepResult {
   closingReminders: number;
   /** TD-009 — conditions approaching their deadline. */
   conditionReminders: number;
+  /** 31 Oct 2026 - conditions still open after their deadline. */
+  conditionOverdueReminders: number;
   /** TD-009 — deals that became firm or ended. Raised reactively, never by the sweep. */
   statusChanges: number;
   /** TD-009 — deals whose expected deposit has not been recorded. */
@@ -193,7 +254,7 @@ export class ReminderSweepService {
   /** A zeroed tally. The sweep fills one over a night; `statusChanged` uses one for a single send. */
   private emptyResult(): SweepResult {
     return {
-      expiryReminders: 0, expired: 0, lawyerReminders: 0, closingReminders: 0, conditionReminders: 0,
+      expiryReminders: 0, expired: 0, lawyerReminders: 0, closingReminders: 0, conditionReminders: 0, conditionOverdueReminders: 0,
       statusChanges: 0, depositReminders: 0, commissionsReceived: 0, afterClosingReminders: 0, voidChequeReminders: 0, skipped: 0, failed: 0, retried: 0, recovered: 0,
     };
   }
@@ -212,16 +273,17 @@ export class ReminderSweepService {
     if (rules.lawyer.on) await this.lawyerDetails(today, result, rules.lawyer.days);
     if (rules.closing.on) await this.closingApproaching(today, result, rules.closing.days);
     if (rules.condition.on) await this.conditionDeadlines(today, result, rules.condition.days);
+    if (rules.condition.on) await this.conditionsOverdue(today, result, rules);
     if (rules.deposit.on) await this.depositsOutstanding(today, result, rules.deposit.days);
     if (rules.commission.on) await this.commissionsReceived(today, result);
     if (rules.void_cheque.on) await this.voidCheques(today, result, rules);
     await this.afterClosing(today, result, rules);
 
     if (result.expiryReminders || result.expired || result.lawyerReminders || result.closingReminders
-      || result.conditionReminders || result.afterClosingReminders || result.voidChequeReminders || result.failed) {
+      || result.conditionReminders || result.conditionOverdueReminders || result.afterClosingReminders || result.voidChequeReminders || result.failed) {
       this.log.log(
         `Reminders: ${result.expiryReminders} expiry, ${result.lawyerReminders} lawyer, `
-        + `${result.closingReminders} closing, ${result.conditionReminders} condition, `
+        + `${result.closingReminders} closing, ${result.conditionReminders} condition, ${result.conditionOverdueReminders} condition past deadline, `
         + `${result.afterClosingReminders} after closing, ${result.voidChequeReminders} void cheque, `
         + `${result.expired} auto-expired, ${result.skipped} skipped, ${result.failed} failed, `
         + `${result.retried} retried (${result.recovered} recovered).`,
@@ -537,11 +599,12 @@ export class ReminderSweepService {
     const rows = await this.prisma.conditions.findMany({
       where: { deadline: { gte: dbDay(from), lte: dbDay(to) }, transactions: REMINDED },
       select: {
-        deadline: true, status: true, type: true, custom_name: true,
+        id: true, deadline: true, status: true, type: true, custom_name: true,
         transactions: {
           select: {
             id: true, trade_no: true, property: true, agent: true, agent_user_id: true, deleted_at: true,
             transaction_statuses: { select: { status: true } },
+            documents: { where: { deleted_at: null, condition_id: { not: null } }, select: CONDITION_DOC_SELECT },
           },
         },
       },
@@ -556,6 +619,7 @@ export class ReminderSweepService {
       if (!t || t.deleted_at || !c.deadline) continue;
       if (conditionIsSettled(c.status)) continue;
       if (this.isSettled(t.transaction_statuses)) continue;
+      if (conditionDocumentIn(c.id, t.documents)) continue; // 31 Oct 2026 - its document is in
 
       const { due, daysRemaining } = conditionReminderFor(today, calendarDay(c.deadline), days);
       if (!due) continue;
@@ -586,6 +650,7 @@ export class ReminderSweepService {
           deadline_date: toDateString(soonest.deadline) ?? '',
           days_remaining: String(soonest.daysRemaining),
           deadline_phrase: deadlinePhrase(soonest.daysRemaining),
+          condition_sentence: conditionDueSentence(txn.property ?? txn.trade_no ?? 'the deal', due),
           agent_name: txn.agent ?? 'there',
         },
         summary: (what + ' ' + deadlinePhrase(soonest.daysRemaining) + ' - ' + (txn.property ?? txn.trade_no ?? '')).trim(),
@@ -593,6 +658,93 @@ export class ReminderSweepService {
         onSent: () => { result.conditionReminders++; },
       });
     }
+  }
+
+  /**
+   * CONDITIONS STILL OPEN AFTER THEIR DEADLINE (Sai, 31 Oct 2026). Every other day for 15 days after
+   * the deadline (CONDITION_OVERDUE_DAYS), the agent is asked again for the Waiver / Notice of
+   * Fulfilment or an Amendment, and Documentation gets a bell + phone line - the deal's "Handled by"
+   * person, else the team for its country. No email to Documentation (Sai: too many mails).
+   *
+   * STOPS, before anything is sent, when the condition is Fulfilled / Waived, its document is in, or
+   * the deal has ended. A new deadline typed from an Amendment simply moves it back to the countdown.
+   *
+   * OLD CONDITIONS ARE LEFT ALONE: only deadlines on or after `after_closing_from` (go-live), as with
+   * the after-closing reminders. One message per deal per day, listing every open one past its date.
+   */
+  private async conditionsOverdue(today: Date, result: SweepResult, rules: ReminderRules): Promise<void> {
+    const start = startOfDay(today);
+    const held = rules.after_closing_from ? ymdDay(rules.after_closing_from) : start;
+    const byWindow = new Date(start.getFullYear(), start.getMonth(), start.getDate() - Math.max(...CONDITION_OVERDUE_DAYS));
+    const lower = held > byWindow ? held : byWindow;
+    const upper = new Date(start.getFullYear(), start.getMonth(), start.getDate() - 1);
+    if (lower > upper) return;
+
+    const rows = await this.prisma.conditions.findMany({
+      where: { deadline: { gte: dbDay(lower), lte: dbDay(upper) }, transactions: REMINDED },
+      select: {
+        id: true, deadline: true, status: true, type: true, custom_name: true,
+        transactions: {
+          select: {
+            id: true, trade_no: true, property: true, agent: true, agent_user_id: true, deleted_at: true,
+            market: true, doc_handler_id: true,
+            transaction_statuses: { select: { status: true } },
+            documents: { where: { deleted_at: null, condition_id: { not: null } }, select: CONDITION_DOC_SELECT },
+          },
+        },
+      },
+      orderBy: [{ deadline: 'asc' }, { position: 'asc' }],
+    });
+
+    type DealTxn = NonNullable<(typeof rows)[number]['transactions']>;
+    const byDeal = new Map<number, { txn: DealTxn; open: { label: string; deadline: Date; daysPast: number; due: boolean }[] }>();
+    for (const c of rows) {
+      const t = c.transactions;
+      if (!t || t.deleted_at || !c.deadline) continue;
+      if (conditionIsSettled(c.status) || this.isSettled(t.transaction_statuses)) continue;
+      if (conditionDocumentIn(c.id, t.documents)) continue;
+      const { due, daysPast } = conditionOverdueFor(today, calendarDay(c.deadline));
+      const entry = byDeal.get(t.id) ?? { txn: t, open: [] };
+      entry.open.push({ label: conditionLabel(c), deadline: c.deadline, daysPast, due });
+      byDeal.set(t.id, entry);
+    }
+
+    for (const { txn, open } of byDeal.values()) {
+      // Sent on a day one of them is due; the message then names every one still open.
+      if (!open.some((o) => o.due)) continue;
+      const msg = this.conditionOverdueMessage(txn, open);
+      const day = dbDay(start);
+      await this.deliver({
+        txnId: txn.id, kind: 'condition_overdue', variant: null, day,
+        daysRemaining: -Math.min(...open.filter((o) => o.due).map((o) => o.daysPast)),
+        agentName: txn.agent, agentUserId: txn.agent_user_id,
+        event: 'transaction.condition_overdue', vars: msg.vars, summary: msg.summary, result,
+        onSent: () => { result.conditionOverdueReminders++; },
+      });
+      await this.tellOffice(txn.id, msg.summary, `condition-overdue-${txn.id}-${day.toISOString().slice(0, 10)}`, 'condition_deadline');
+    }
+  }
+
+  /** The agent's past-the-deadline message, from the conditions still open. */
+  private conditionOverdueMessage(
+    t: { id: number; trade_no: string | null; property: string | null; agent: string | null },
+    open: readonly { label: string; deadline: Date; daysPast: number }[],
+  ): { vars: Record<string, string>; summary: string } {
+    const place = t.property ?? t.trade_no ?? 'the deal';
+    const oldest = open.reduce((a, b) => (b.daysPast > a.daysPast ? b : a));
+    return {
+      vars: {
+        deal_number: t.trade_no ?? String(t.id),
+        property_address: t.property ?? '-',
+        condition_list: open.map((o) => o.label).join(', '),
+        condition_count: String(open.length),
+        deadline_date: toDateString(oldest.deadline) ?? '',
+        days_past: String(oldest.daysPast),
+        condition_sentence: conditionOverdueSentence(place, open),
+        agent_name: t.agent ?? 'there',
+      },
+      summary: conditionOverdueSummary(place, open),
+    };
   }
 
   // ---------------------------------------------------------------- deposits outstanding
@@ -1120,14 +1272,17 @@ export class ReminderSweepService {
     await this.tellOffice(txnId, title, `listing-extended-${txnId}-${toDateString(to)}`);
   }
 
-  /** A bell + phone message for the office about one deal: Documentation "Handled by", else the team. */
-  private async tellOffice(txnId: number, title: string, dedupeKey: string): Promise<void> {
+  /**
+   * A bell + phone message for the office about one deal: Documentation "Handled by", else the team.
+   * The category is the preference it is filed under - listing expiry unless the caller says otherwise.
+   */
+  private async tellOffice(txnId: number, title: string, dedupeKey: string, category = 'listing_expiry'): Promise<void> {
     if (!this.dispatcher) return;
     const t = await this.prisma.transactions.findFirst({ where: { id: txnId }, select: { market: true, doc_handler_id: true } });
     if (!t) return;
     for (const p of await this.documentationFor(t)) {
       await this.dispatcher.dispatch({
-        category: 'listing_expiry', userId: p.id, title,
+        category, userId: p.id, title,
         link: areaPath('desk', `transactions/${txnId}`), dedupeKey, channels: ['in_app', 'push'],
       }).catch(() => null);
     }
@@ -1166,7 +1321,7 @@ export class ReminderSweepService {
             transaction_statuses: { select: { status: true } },
             // TD-009 - a condition reminder is rebuilt from the conditions as they stand TONIGHT,
             // so one satisfied since the failed attempt is not chased again.
-            conditions: { select: { deadline: true, status: true, type: true, custom_name: true }, orderBy: { position: 'asc' } },
+            conditions: { select: { id: true, deadline: true, status: true, type: true, custom_name: true }, orderBy: { position: 'asc' } },
             // 29 Oct 2026 - an after-closing documents reminder is rebuilt from the documents as they stand.
             documents: { where: { deleted_at: null, mandatory: true }, select: { title: true, status: true, validation: true }, orderBy: { position: 'asc' } },
           },
@@ -1178,7 +1333,11 @@ export class ReminderSweepService {
       const t = row.transactions;
       result.retried++;
 
-      const rebuilt = t && !t.deleted_at ? this.rebuild(row.kind, t, today, rules) : null;
+      // 31 Oct 2026 - a condition reminder also needs the conditions' own documents, as they stand now.
+      const conditionDocs = t && (row.kind === 'condition' || row.kind === 'condition_overdue')
+        ? await this.prisma.documents.findMany({ where: { transaction_id: t.id, deleted_at: null, condition_id: { not: null } }, select: CONDITION_DOC_SELECT })
+        : [];
+      const rebuilt = t && !t.deleted_at ? this.rebuild(row.kind, { ...t, condition_docs: conditionDocs }, today, rules) : null;
       if (!rebuilt) {
         // The deal is gone, closed, or no longer missing anything: there is nothing left to send.
         await this.closeRetry(row.id, 'Skipped', 'No longer applicable — the reminder condition has cleared.');
@@ -1240,8 +1399,9 @@ export class ReminderSweepService {
       closing_date: Date | null; listing_expiry_date: Date | null;
       buyer_lawyer_name: string | null; seller_lawyer_name: string | null;
       transaction_statuses: { status: string }[];
-      conditions?: { deadline: Date | null; status: string; type: string | null; custom_name: string | null }[];
+      conditions?: { id: number; deadline: Date | null; status: string; type: string | null; custom_name: string | null }[];
       documents?: { title: string; status: string; validation: string }[];
+      condition_docs?: ConditionDoc[];
     },
     today: Date,
     rules: ReminderRules,
@@ -1298,9 +1458,10 @@ export class ReminderSweepService {
     if (kind === 'condition') {
       if (!rules.condition.on || this.isSettled(t.transaction_statuses)) return null;
       const due = (t.conditions ?? [])
-        .filter((c) => c.deadline && !conditionIsSettled(c.status))
+        .filter((c) => c.deadline && !conditionIsSettled(c.status) && !conditionDocumentIn(c.id, t.condition_docs ?? []))
         .map((c) => ({ label: conditionLabel(c), deadline: c.deadline as Date, ...conditionReminderFor(today, calendarDay(c.deadline as Date), rules.condition.days) }))
-        .filter((c) => c.due);
+        .filter((c) => c.due)
+        .sort((a, b) => a.daysRemaining - b.daysRemaining);
       if (due.length === 0) return null; // satisfied, waived or past - nothing left to chase
       const soonest = due.reduce((a, b) => (b.daysRemaining < a.daysRemaining ? b : a));
       const what = due.length === 1 ? due[0].label : String(due.length) + ' conditions';
@@ -1314,10 +1475,25 @@ export class ReminderSweepService {
           deadline_date: toDateString(soonest.deadline) ?? '',
           days_remaining: String(soonest.daysRemaining),
           deadline_phrase: deadlinePhrase(soonest.daysRemaining),
+          condition_sentence: conditionDueSentence(t.property ?? t.trade_no ?? 'the deal', due),
           agent_name: t.agent ?? 'there',
         },
         summary: (what + ' ' + deadlinePhrase(soonest.daysRemaining) + ' - ' + (t.property ?? t.trade_no ?? '')).trim(),
       };
+    }
+
+    // 31 Oct 2026 - past the deadline: rebuilt the same way, from what is still open today.
+    if (kind === 'condition_overdue') {
+      if (!rules.condition.on || this.isSettled(t.transaction_statuses)) return null;
+      const held = rules.after_closing_from ? ymdDay(rules.after_closing_from) : startOfDay(today);
+      const open = (t.conditions ?? [])
+        .filter((c) => c.deadline && calendarDay(c.deadline) >= held && !conditionIsSettled(c.status) && !conditionDocumentIn(c.id, t.condition_docs ?? []))
+        .map((c) => ({ label: conditionLabel(c), deadline: c.deadline as Date, daysPast: conditionOverdueFor(today, calendarDay(c.deadline as Date)).daysPast }))
+        .filter((c) => c.daysPast >= 1 && c.daysPast <= Math.max(...CONDITION_OVERDUE_DAYS))
+        .sort((a, b) => a.deadline.getTime() - b.deadline.getTime());
+      if (open.length === 0) return null;
+      const msg = this.conditionOverdueMessage(t, open);
+      return { event: 'transaction.condition_overdue', vars: msg.vars, summary: msg.summary };
     }
 
     if (!rules.lawyer.on || !t.closing_date || !tracksBothLawyers(t.type) || this.isSettled(t.transaction_statuses)) return null;
